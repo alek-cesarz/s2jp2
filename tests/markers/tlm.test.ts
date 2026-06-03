@@ -50,6 +50,26 @@ describe('extractTileLengths (synthetic)', () => {
     const segment = new Uint8Array([0xFF, 0x55, 0x00, 0x04, 0x00, 0xC0]);
     expect(() => extractTileLengths(segment)).toThrow(/invalid ST\/SP/);
   });
+  it('reads lengths with ST=1 (1-byte tile index field, SP=1)', () => {
+    // Stlm=0b01_01_0000=0x50 → ST=1 (1-byte index), SP=1 (4-byte length)
+    // 2 entries × (1 + 4) = 10 bytes body. Ltlm = 4 + 10 = 14.
+    const seg = new Uint8Array([
+      0xFF, 0x55, 0x00, 0x0E, 0x00, 0x50,
+      0x00, 0x00, 0x00, 0x00, 0x64,  // tileIdx=0, length=100
+      0x01, 0x00, 0x00, 0x00, 0xC8,  // tileIdx=1, length=200
+    ]);
+    expect(extractTileLengths(seg)).toEqual([100, 200]);
+  });
+  it('reads lengths with ST=2 (2-byte tile index field, SP=1)', () => {
+    // Stlm=0b01_10_0000=0x60 → ST=2 (2-byte index), SP=1 (4-byte length)
+    // 2 entries × (2 + 4) = 12 bytes body. Ltlm = 4 + 12 = 16.
+    const seg = new Uint8Array([
+      0xFF, 0x55, 0x00, 0x10, 0x00, 0x60,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x64,  // tileIdx=0, length=100
+      0x00, 0x01, 0x00, 0x00, 0x00, 0xC8,  // tileIdx=1, length=200
+    ]);
+    expect(extractTileLengths(seg)).toEqual([100, 200]);
+  });
 });
 
 describe('tilePartRangesFromHeader (synthetic)', () => {

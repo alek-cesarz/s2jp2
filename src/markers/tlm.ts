@@ -13,7 +13,16 @@ function entrySizes(stlm: number): [number, number] {
   return [tBytes, pBytes];
 }
 
-/** Locate `FF 55` and return the declared tile-part byte lengths. */
+/**
+ * Locate `FF 55` and return the declared tile-part byte lengths.
+ *
+ * Reads only the first TLM segment. Files with >~16k tile-parts can split
+ * TLM into multiple segments (distinguished by Ztlm); this parser ignores
+ * any subsequent TLM segments. S2 MSI products at 10980×10980 with 1024
+ * tiles fit in a single TLM (121 entries × 4 bytes ≪ 65535).
+ *
+ * TODO: support multi-segment TLM if a real fixture ever exceeds one segment.
+ */
 export function extractTileLengths(data: Uint8Array): number[] {
   const pos = findMarker(data, TLM_MARKER_0, TLM_MARKER_1);
   if (pos < 0) throw new ParseError('TLM marker (FF 55) not found');
