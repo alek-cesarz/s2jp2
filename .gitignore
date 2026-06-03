@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.log
+tests/fixtures/*.jp2
+wrapper/build-wasm/
