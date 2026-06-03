@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsc && npm run copy:wasm",
     "copy:wasm": "mkdir -p dist/decoder && cp src/decoder/stex-jp2.wasm src/decoder/stex-jp2.mjs dist/decoder/",
+    "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "fetch:fixture": "bash scripts/fetch-fixture.sh",
