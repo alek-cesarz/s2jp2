@@ -57,6 +57,26 @@ describe('extractSizInfo (synthetic)', () => {
   it('throws ParseError when SIZ is truncated', () => {
     expect(() => extractSizInfo(new Uint8Array([0xFF, 0x51, 0x00, 0x05]))).toThrow(ParseError);
   });
+  it('throws ParseError when Xsiz=0 (degenerate image dims)', () => {
+    expect(() => extractSizInfo(buildSyntheticSiz({
+      Xsiz: 0, Ysiz: 10980, XTsiz: 1024, YTsiz: 1024, Csiz: 3,
+    }))).toThrow(/degenerate image dimensions/);
+  });
+  it('throws ParseError when XTsiz=0 (degenerate tile dims)', () => {
+    expect(() => extractSizInfo(buildSyntheticSiz({
+      Xsiz: 10980, Ysiz: 10980, XTsiz: 0, YTsiz: 1024, Csiz: 3,
+    }))).toThrow(/degenerate tile dimensions/);
+  });
+  it('throws ParseError when Csiz=0 (unsupported component count)', () => {
+    expect(() => extractSizInfo(buildSyntheticSiz({
+      Xsiz: 10980, Ysiz: 10980, XTsiz: 1024, YTsiz: 1024, Csiz: 0,
+    }))).toThrow(/unsupported Csiz=0/);
+  });
+  it('throws ParseError when Csiz=5 (exceeds supported max)', () => {
+    expect(() => extractSizInfo(buildSyntheticSiz({
+      Xsiz: 10980, Ysiz: 10980, XTsiz: 1024, YTsiz: 1024, Csiz: 5,
+    }))).toThrow(/unsupported Csiz=5/);
+  });
 });
 
 const TCI = 'tests/fixtures/sample_TCI_10m.jp2';

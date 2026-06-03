@@ -16,6 +16,14 @@ export interface SizInfo {
  * Locate the SIZ marker (FF 51) inside main-header bytes and return image
  * dimensions, tile dimensions, and component count. Throws if absent or
  * truncated.
+ *
+ * **Precondition:** `data` should be the codestream main header (starting
+ * at or near SOC, `FF 4F`), not the raw file with JP2 box wrapping. The
+ * scanner walks bytes until it finds `FF 51`; in practice S2 JP2 box
+ * payloads do not contain coincidental `FF 51` bytes before the codestream,
+ * but adversarial JP2 wrappers could mislead this scanner. Use
+ * `firstSotOffset` / `socOffset` from `./codestream.js` to anchor the
+ * search if you need stricter robustness.
  */
 export function extractSizInfo(data: Uint8Array): SizInfo {
   const pos = findMarker(data, SIZ_MARKER_0, SIZ_MARKER_1);
