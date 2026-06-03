@@ -1,8 +1,7 @@
-// Minimal embind wrapper around libopenjp2 exposing the two things the
-// cornerstone build did not: cp_reduce (resolution factor) AND opj_set_decode_area
-// (windowed decode). Scope is what STEX needs for a JP2 visualizer mirroring
-// the COG one: take an encoded J2K/JP2 byte slice, decode at a given reduce
-// level, optionally within a window, return an interleaved 8-bit RGB buffer.
+// Minimal embind wrapper around libopenjp2 exposing cp_reduce (resolution
+// factor) AND opj_set_decode_area (windowed decode). Returns pixels in their
+// native precision: Uint8Array for prec<=8 (TCI / SCL / CLD / SNW), Uint16Array
+// for prec>8 (reflectance bands / AOT / WVP).
 //
 // Builds against libopenjp2.a produced by emcmake.
 
@@ -60,9 +59,6 @@ void msg_error(const char* msg, void* sink) {
 }
 void msg_quiet(const char*, void*) {}
 
-// Detect codestream type from first 4 bytes.
-//   0xFF 0x4F 0xFF 0x51  -> raw J2K (SOC + SIZ)
-//   anything else        -> assume JP2 box wrapping
 OPJ_CODEC_FORMAT detect_codec(const std::uint8_t* data) {
     if (data[0] == 0xFF && data[1] == 0x4F && data[2] == 0xFF && data[3] == 0x51) {
         return OPJ_CODEC_J2K;
@@ -74,26 +70,28 @@ OPJ_CODEC_FORMAT detect_codec(const std::uint8_t* data) {
 
 class DecodeResult {
 public:
-    // Interleaved 8-bit RGB (or grayscale if numComps == 1).
     emscripten::val pixels() const {
-        return emscripten::val(emscripten::typed_memory_view(rgb_.size(), rgb_.data()));
+        if (bitsPerSample_ <= 8) {
+            return emscripten::val(emscripten::typed_memory_view(buf8_.size(), buf8_.data()));
+        }
+        return emscripten::val(emscripten::typed_memory_view(buf16_.size(), buf16_.data()));
     }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
     std::uint32_t numComponents() const { return numComps_; }
+    std::uint32_t bitsPerSample() const { return bitsPerSample_; }
     std::string error() const { return error_; }
     bool ok() const { return error_.empty(); }
 
-    std::vector<std::uint8_t> rgb_;
+    std::vector<std::uint8_t>  buf8_;
+    std::vector<std::uint16_t> buf16_;
     std::uint32_t width_{0};
     std::uint32_t height_{0};
     std::uint32_t numComps_{0};
+    std::uint32_t bitsPerSample_{0};
     std::string error_;
 };
 
-// Public decode entry: pass a Uint8Array of the encoded bytes, an optional
-// reduce level, and an optional decode area in full-resolution reference-grid
-// pixels. The area is clamped to the image extent inside OpenJPEG.
 DecodeResult decode(const emscripten::val& encoded,
                     std::uint32_t reduceLevel,
                     bool useArea,
@@ -103,9 +101,6 @@ DecodeResult decode(const emscripten::val& encoded,
                     std::int32_t areaY1) {
     DecodeResult out;
 
-    // Copy the encoded bytes out of JS-land into a C++ vector. Embind's
-    // typed_memory_view would be zero-copy but ownership semantics across the
-    // detached buffer get fiddly; this is the safe path for a spike.
     const std::uint32_t encLen = encoded["length"].as<std::uint32_t>();
     std::vector<std::uint8_t> enc(encLen);
     emscripten::val view{emscripten::typed_memory_view(enc.size(), enc.data())};
@@ -206,19 +201,45 @@ DecodeResult decode(const emscripten::val& encoded,
         }
     }
 
-    // Planar int32 → interleaved uint8. S2 TCI is unsigned 8-bit per component,
-    // but each plane is still stored as int32 in OpenJPEG. We clamp defensively.
+    const OPJ_UINT32 prec = image->comps[0].prec;
+    for (OPJ_UINT32 c = 1; c < numComps; ++c) {
+        if (image->comps[c].prec != prec) {
+            opj_image_destroy(image);
+            opj_destroy_codec(codec);
+            opj_stream_destroy(opj_stream);
+            out.error_ = "mixed component precisions not supported";
+            return out;
+        }
+    }
+    out.bitsPerSample_ = prec;
+
     const std::size_t pixels = static_cast<std::size_t>(w) * h;
-    out.rgb_.resize(pixels * numComps);
-    for (OPJ_UINT32 c = 0; c < numComps; ++c) {
-        const OPJ_INT32* src = image->comps[c].data;
-        std::uint8_t* dst = out.rgb_.data() + c;
-        for (std::size_t i = 0; i < pixels; ++i) {
-            OPJ_INT32 v = src[i];
-            if (v < 0) v = 0;
-            if (v > 255) v = 255;
-            *dst = static_cast<std::uint8_t>(v);
-            dst += numComps;
+    if (prec <= 8) {
+        out.buf8_.resize(pixels * numComps);
+        for (OPJ_UINT32 c = 0; c < numComps; ++c) {
+            const OPJ_INT32* src = image->comps[c].data;
+            std::uint8_t* dst = out.buf8_.data() + c;
+            for (std::size_t i = 0; i < pixels; ++i) {
+                OPJ_INT32 v = src[i];
+                if (v < 0) v = 0;
+                if (v > 255) v = 255;
+                *dst = static_cast<std::uint8_t>(v);
+                dst += numComps;
+            }
+        }
+    } else {
+        const OPJ_INT32 maxv = (1 << prec) - 1;
+        out.buf16_.resize(pixels * numComps);
+        for (OPJ_UINT32 c = 0; c < numComps; ++c) {
+            const OPJ_INT32* src = image->comps[c].data;
+            std::uint16_t* dst = out.buf16_.data() + c;
+            for (std::size_t i = 0; i < pixels; ++i) {
+                OPJ_INT32 v = src[i];
+                if (v < 0) v = 0;
+                if (v > maxv) v = maxv;
+                *dst = static_cast<std::uint16_t>(v);
+                dst += numComps;
+            }
         }
     }
     out.width_ = w;
@@ -237,6 +258,7 @@ EMSCRIPTEN_BINDINGS(stex_jp2) {
         .function("width", &DecodeResult::width)
         .function("height", &DecodeResult::height)
         .function("numComponents", &DecodeResult::numComponents)
+        .function("bitsPerSample", &DecodeResult::bitsPerSample)
         .function("error", &DecodeResult::error)
         .function("ok", &DecodeResult::ok);
 

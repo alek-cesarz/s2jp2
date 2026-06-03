@@ -1,0 +1,61 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { loadDecoder } from '../src/decoder/decoder.js';
+
+const TCI = 'tests/fixtures/sample_TCI_10m.jp2';
+const B04 = 'tests/fixtures/sample_B04_60m.jp2';
+
+describe.runIf(existsSync(TCI))('Decoder (TCI 10m uint8 RGB)', () => {
+  it('decodes the full image at cp_reduce=4 as Uint8Array', async () => {
+    const decoder = await loadDecoder();
+    const data = readFileSync(TCI);
+    const r = decoder.decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), {
+      reduceLevel: 4,
+    });
+    expect(r.width).toBe(687);
+    expect(r.height).toBe(687);
+    expect(r.numComponents).toBe(3);
+    expect(r.bitsPerSample).toBe(8);
+    expect(r.pixels).toBeInstanceOf(Uint8Array);
+    expect(r.pixels.byteLength).toBe(687 * 687 * 3);
+  });
+
+  it('decodes a 2048×2048 window at cp_reduce=3 → 256×256 uint8 RGB', async () => {
+    const decoder = await loadDecoder();
+    const data = readFileSync(TCI);
+    const r = decoder.decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), {
+      reduceLevel: 3,
+      decodeArea: { x0: 4466, y0: 4466, x1: 6514, y1: 6514 },
+    });
+    expect(r.width).toBe(256);
+    expect(r.height).toBe(256);
+    expect(r.numComponents).toBe(3);
+    expect(r.bitsPerSample).toBe(8);
+    expect(r.pixels).toBeInstanceOf(Uint8Array);
+  });
+});
+
+describe.runIf(existsSync(B04))('Decoder (B04 60m single-band uint16)', () => {
+  it('decodes the full image as a single-component Uint16Array', async () => {
+    const decoder = await loadDecoder();
+    const data = readFileSync(B04);
+    const r = decoder.decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), {
+      reduceLevel: 0,
+    });
+    expect(r.width).toBe(1830);
+    expect(r.height).toBe(1830);
+    expect(r.numComponents).toBe(1);
+    expect(r.bitsPerSample).toBeGreaterThan(8);
+    expect(r.pixels).toBeInstanceOf(Uint16Array);
+    expect(r.pixels.length).toBe(1830 * 1830);
+  });
+});
+
+describe('Decoder error surfacing', () => {
+  it('throws rather than returning a degenerate result', async () => {
+    const decoder = await loadDecoder();
+    expect(() =>
+      decoder.decode(new Uint8Array([0, 0, 0, 0]), { reduceLevel: 0 }),
+    ).toThrow(/decode/i);
+  });
+});
