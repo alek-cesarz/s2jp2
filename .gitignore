@@ -3,3 +3,4 @@ dist/
 *.log
 tests/fixtures/*.jp2
 wrapper/build-wasm/
+openjpeg/
