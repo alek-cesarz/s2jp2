@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads two reference Sentinel-2 JP2 assets used by the test suite:
-#   1. TCI_10m  - 3-band uint8, 10980x10980, exercises the multi-component RGB path
-#   2. B04_60m  - 1-band uint16, 1830x1830, exercises the single-band 16-bit path
+#   1. TCI_10m  — 3-band uint8, 10980×10980, exercises the multi-component RGB path
+#   2. B04_60m  — 1-band uint16, 1830×1830, exercises the single-band 16-bit path
 # Requires ~/tools/cdse.json (the get-token skill profile) to exist.
 set -euo pipefail
 
