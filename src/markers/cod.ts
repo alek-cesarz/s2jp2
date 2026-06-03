@@ -1,5 +1,6 @@
 import { ParseError, ProfileMismatchError } from '../errors.js';
 import { S2_N0512_CAPABILITY } from '../profile.js';
+import { findMarker } from './scan.js';
 
 const COD_MARKER_0 = 0xff;
 const COD_MARKER_1 = 0x52;
@@ -102,11 +103,4 @@ export function validateS2N0512Capability(info: CodInfo): void {
       );
     }
   }
-}
-
-function findMarker(data: Uint8Array, a: number, b: number): number {
-  for (let i = 0; i + 1 < data.byteLength; i++) {
-    if (data[i] === a && data[i + 1] === b) return i;
-  }
-  return -1;
 }

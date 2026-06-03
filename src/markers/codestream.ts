@@ -1,4 +1,5 @@
 import { ParseError } from '../errors.js';
+import { findMarker } from './scan.js';
 
 const SOC = [0xff, 0x4f] as const; // start of codestream
 const SOT = [0xff, 0x90] as const; // start of tile-part
@@ -84,11 +85,4 @@ export function stitchPartialCodestream(
   out[cursor] = EOC[0];
   out[cursor + 1] = EOC[1];
   return out;
-}
-
-function findMarker(data: Uint8Array, a: number, b: number): number {
-  for (let i = 0; i + 1 < data.byteLength; i++) {
-    if (data[i] === a && data[i + 1] === b) return i;
-  }
-  return -1;
 }

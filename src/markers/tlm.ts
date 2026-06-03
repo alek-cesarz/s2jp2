@@ -1,5 +1,6 @@
 import { ParseError } from '../errors.js';
 import { firstSotOffset } from './codestream.js';
+import { findMarker } from './scan.js';
 
 const TLM_MARKER_0 = 0xff;
 const TLM_MARKER_1 = 0x55;
@@ -93,11 +94,4 @@ export function tilePartRangesFromHeader(header: Uint8Array): ByteRange[] {
     start = end;
   }
   return ranges;
-}
-
-function findMarker(data: Uint8Array, a: number, b: number): number {
-  for (let i = 0; i + 1 < data.byteLength; i++) {
-    if (data[i] === a && data[i + 1] === b) return i;
-  }
-  return -1;
 }

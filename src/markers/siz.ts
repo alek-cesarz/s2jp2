@@ -1,4 +1,5 @@
 import { ParseError } from '../errors.js';
+import { findMarker } from './scan.js';
 
 const SIZ_MARKER_0 = 0xff;
 const SIZ_MARKER_1 = 0x51;
@@ -57,11 +58,4 @@ export function extractSizInfo(data: Uint8Array): SizInfo {
     throw new ParseError(`SIZ declares unsupported Csiz=${numComponents} (expected 1..4)`);
   }
   return { imageWidth, imageHeight, tileWidth, tileHeight, numComponents };
-}
-
-function findMarker(data: Uint8Array, a: number, b: number): number {
-  for (let i = 0; i + 1 < data.byteLength; i++) {
-    if (data[i] === a && data[i + 1] === b) return i;
-  }
-  return -1;
 }
