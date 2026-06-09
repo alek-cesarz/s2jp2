@@ -40,3 +40,6 @@ export type { DecodeArea, DecodeOptions, DecodeResult } from './decoder/decoder.
 
 export { fetchAndDecodeWindow } from './pipeline.js';
 export type { FetchAndDecodeOptions, RangeFetcher } from './pipeline.js';
+
+export { DEFAULT_TILE_PART_PROBE, fetchTilePartTrimmed } from './fetch-trimmed.js';
+export type { FetchTilePartTrimmedOptions } from './fetch-trimmed.js';

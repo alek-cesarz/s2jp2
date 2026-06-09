@@ -1,9 +1,9 @@
 import { loadDecoder } from './decoder/decoder.js';
 import type { DecodeResult, Decoder } from './decoder/decoder.js';
+import { fetchTilePartTrimmed } from './fetch-trimmed.js';
 import { inspectAsset } from './inspect.js';
 import type { AssetDescriptor } from './inspect.js';
 import { stitchPartialCodestream } from './markers/codestream.js';
-import { truncateToPackets } from './markers/plt.js';
 import { planWindowFetches } from './planner.js';
 import type { Window } from './planner.js';
 
@@ -20,6 +20,12 @@ export interface FetchAndDecodeOptions {
   headerProbeBytes?: number;
   /** Reusable decoder (the WASM module loads ~200 ms; cache when possible). */
   decoder?: Decoder;
+  /**
+   * Per-tile-part probe size for PLT-trimmed fetching. Default 4 KB — enough
+   * to hold SOT + PLT(s) + SOD for any S2 tile-part. Increase only for
+   * codestreams with unusually many packets per tile-part.
+   */
+  tilePartProbeBytes?: number;
 }
 
 const DEFAULT_HEADER_PROBE = 100 * 1024;
@@ -28,6 +34,12 @@ const DEFAULT_HEADER_PROBE = 100 * 1024;
  * Fetch + decode a window of a JP2 asset. Returns a `DecodeResult` whose
  * `pixels` is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and
  * `Uint16Array` for 16-bit assets (reflectance bands / AOT / WVP).
+ *
+ * Per-tile-part bytes are PLT-trimmed: at low overview levels we read a
+ * small probe of each tile-part to learn the per-packet byte lengths, then
+ * fetch only the prefix of bytes corresponding to the packets that decode
+ * at the requested `overviewLevel`. At reduce-level 4 with `keepPackets`
+ * = 1, this cuts per-tile-part bandwidth from ~MB to ~KB.
  */
 export async function fetchAndDecodeWindow(
   fetcher: RangeFetcher,
@@ -42,14 +54,21 @@ export async function fetchAndDecodeWindow(
 
   const plan = planWindowFetches(descriptor, options.window, options.overviewLevel);
 
-  // Fetch each intersecting tile-part in full, then truncate to keepPackets.
-  // (Smarter: probe + remainder like s2surgeon — a later optimisation.)
+  // PLT-trimmed per-tile-part fetches. Each call probes + (optionally)
+  // fetches the remainder, returning bytes equivalent to truncating a
+  // full fetch but sized to what's actually consumed. Falls back to
+  // full-tile-part fetching on PLT-parsing edge cases.
   const payloads: Uint8Array[] = await Promise.all(
-    plan.tileRanges.map(async (range) => {
-      const full = await fetcher.fetchRange(range.start, range.end);
-      return plan.keepPackets >= plan.totalPackets
-        ? full
-        : truncateToPackets(full, plan.keepPackets);
+    plan.tileRanges.map((range) => {
+      const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
+        range,
+        keepPackets: plan.keepPackets,
+        totalPackets: plan.totalPackets,
+      };
+      if (options.tilePartProbeBytes !== undefined) {
+        opts.probeBytes = options.tilePartProbeBytes;
+      }
+      return fetchTilePartTrimmed(fetcher, opts);
     }),
   );
 
