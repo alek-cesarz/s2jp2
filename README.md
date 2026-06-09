@@ -6,7 +6,11 @@ TypeScript library for **client-side streaming visualization of Sentinel-2 JPEG 
 
 Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 MB; a full reflectance band is similar. Naive HTTP streaming would require downloading the whole asset just to look at a thumbnail-sized region. This library does what `s2surgeon` does for native Rust, but in TypeScript + WASM:
 
-1. **Read only the bytes needed** for a requested window at a requested zoom level. The TLM marker tells us which tile-parts the window intersects; PLT markers inside each tile-part tell us how many packets to keep for a given resolution-reduction. We compute the byte ranges, ask a consumer-supplied `RangeFetcher` to retrieve them, stitch a partial JPEG 2000 codestream, and decode.
+1. **Read only the bytes needed** for a requested window at a requested zoom level. Two layers of byte trimming work together:
+   - **TLM (Tile-part Length) markers** tell us which tile-parts the window intersects and where they live in the file — no scanning from byte zero.
+   - **PLT (Packet Length Table) markers** inside each tile-part declare per-packet byte sizes. For each tile-part we read a small probe (~4 KB) containing the PLT, compute the byte prefix that holds the packets needed for the requested overview level, then fetch only that prefix. At reduce-level 4 this cuts per-tile-part bandwidth from ~MB to ~KB.
+
+   We compute the byte ranges, ask a consumer-supplied `RangeFetcher` to retrieve them, stitch a partial JPEG 2000 codestream, and decode.
 2. **Decode at native precision in the browser.** A vendored OpenJPEG 2.5.3 WASM (247 KB) exposes `cp_reduce` (resolution reduction) and `opj_set_decode_area` (windowed decode) — the two APIs the popular `@cornerstonejs/codec-openjpeg` package doesn't expose. Output is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and `Uint16Array` for 16-bit assets (reflectance bands / AOT / WVP).
 3. **Stay out of the way.** No I/O is bundled; the consumer provides a `RangeFetcher` interface. That keeps STEX's existing S3 SigV4 + nginx proxy plumbing in charge of network and auth.
 
@@ -21,7 +25,12 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
   | 2048 × 2048 | L=3 | 256×256 | 113 ms |
   | 2048 × 2048 | L=2 | 512×512 | 298 ms |
 - **Bundle size:** 247 KB WASM + 46 KB JS glue + ~30 KB of TS (compiled). No runtime dependencies.
-- **Tests:** 79 tests across 10 files; real CDSE fixtures (TCI 10 m + B04 60 m) exercise every layer end-to-end.
+- **Tests:** 87 tests across 11 files; real CDSE fixtures (TCI 10 m + B04 60 m) exercise every layer end-to-end, plus synthetic tile-parts exercise the PLT-trimmed fetch paths.
+- **Fetch trimming** (typical S2 B04_10m tile-part at reduce-level 4, ~20 packets per tile-part):
+  | Strategy | Bytes per tile-part |
+  |---|---|
+  | Naive (fetch full, truncate client-side) | ~950 KB |
+  | PLT-trimmed (probe + remainder) | ~5–8 KB |
 
 ## Architecture
 
@@ -37,7 +46,8 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
          │  1. fetch header (default 100 KB)        │
          │  2. inspectAsset → AssetDescriptor       │
          │  3. planWindowFetches → byte ranges      │
-         │  4. fetch tile-parts → truncateToPackets │
+         │  4. fetchTilePartTrimmed (PLT-trimmed):  │
+         │     probe → parse PLT → fetch remainder  │
          │  5. stitchPartialCodestream              │
          │  6. Decoder.decode (WASM)                │
          └─────┬──────────────────────────────────┬─┘
@@ -67,6 +77,7 @@ src/
 ├── window.ts                TileGrid + windowTileIndices + groupedTilePartRanges
 ├── inspect.ts               inspectAsset → AssetDescriptor (top-level "what is this asset?")
 ├── planner.ts               planWindowFetches → FetchPlan (byte ranges + keep-packets)
+├── fetch-trimmed.ts         fetchTilePartTrimmed (PLT-trimmed two-phase tile-part read)
 ├── decoder/
 │   ├── decoder.ts           Decoder class (typed TS facade)
 │   ├── stex-jp2.wasm        Vendored OpenJPEG 2.5.3 build
@@ -83,11 +94,14 @@ import {
   inspectAsset,                    // header bytes → AssetDescriptor
   planWindowFetches,               // descriptor + window + level → FetchPlan
   fetchAndDecodeWindow,            // one-shot end-to-end
+  fetchTilePartTrimmed,            // PLT-trimmed two-phase fetch for a single tile-part
+  DEFAULT_TILE_PART_PROBE,         // 4 KB — the default per-tile-part probe size
   loadDecoder,                     // load the WASM (once per session)
   Decoder,
   type AssetDescriptor,
   type DecodeResult,
   type FetchPlan,
+  type FetchTilePartTrimmedOptions,
   type RangeFetcher,
   type Window,
   type TileGrid,
@@ -133,7 +147,8 @@ interface FetchAndDecodeOptions {
   overviewLevel: number;                       // 0 = full res, R = lowest
   descriptor?: AssetDescriptor;                // reuse across calls — avoids re-parsing header
   decoder?: Decoder;                           // reuse across calls — WASM load is ~200 ms
-  headerProbeBytes?: number;                   // default 100 KB
+  headerProbeBytes?: number;                   // default 100 KB (one-time, on first call)
+  tilePartProbeBytes?: number;                 // default 4 KB (per tile-part, every call)
 }
 
 interface DecodeResult {
@@ -146,6 +161,29 @@ interface DecodeResult {
 ```
 
 The window is specified in **full-resolution source pixels** (i.e. the UTM grid the SIZ marker declares). At `overviewLevel = 3` the decoder shrinks to 1/8 — so a 2048×2048 window decodes to 256×256.
+
+Per-tile-part bytes are PLT-trimmed: for each intersecting tile-part the library issues a probe (default 4 KB), parses the PLT marker to learn per-packet byte lengths, and fetches only the prefix of bytes the requested overview level actually decodes. At reduce-level 4 with `keepPackets = 1` this cuts per-tile-part bandwidth from ~MB to ~KB. Pass `tilePartProbeBytes` to override the default — only needed for codestreams with unusually many packets per tile-part.
+
+### `fetchTilePartTrimmed(fetcher, options) → Uint8Array`
+
+The lower-level helper that backs the per-tile-part bytes work inside `fetchAndDecodeWindow`. Exported so consumers can drive PLT-trimmed reads directly (e.g. when integrating with a custom planner).
+
+```ts
+interface FetchTilePartTrimmedOptions {
+  range: { start: number; end: number };       // tile-part byte range (from TLM)
+  keepPackets: number;                         // packets to keep (from planWindowFetches)
+  totalPackets: number;                        // total packets per tile-part
+  probeBytes?: number;                         // default DEFAULT_TILE_PART_PROBE (4 KB)
+}
+```
+
+The function returns bytes byte-equivalent to `truncateToPackets(fullFetch, keepPackets)` — same SOT with patched `Psot`, same packet payload prefix — but the underlying range fetches are sized to what's actually consumed:
+
+- `keepPackets >= totalPackets` → single full-range fetch (no trimming possible).
+- Tile-part smaller than the probe → single full-range fetch (one round trip beats two for small payloads).
+- Probe covers everything → slice the probe and return. One fetch.
+- Probe + remainder needed → two fetches sized to the byte prefix.
+- Probe misses SOD, or PLT count < `keepPackets` → fall back to a full-range fetch. Never crashes on these edge cases.
 
 ## Integrating into STEX as the JP2 visualizer
 
@@ -320,10 +358,10 @@ Verified against real CDSE fixtures (TCI 10 m + B04 60 m). Other rows are inferr
 
 ### Deferred (worth doing later, scoped)
 
-- **Probe-and-remainder fetch optimization.** The current pipeline fetches each intersecting tile-part in full, then truncates locally. At coarse zoom (overview ≥ 3) this wastes 5–20× the bytes. `s2surgeon` probes the first ~4 KB of each tile-part, parses the PLT to compute exact bytes needed, then fetches just the remainder. Adds ~80 LOC to `pipeline.ts` and one helper to `plt.ts`. Defer until interactive UX shows it's needed.
 - **Multi-segment TLM support.** A single TLM segment caps at ~16 380 tile-parts. No S2 MSI asset reaches that limit (densest is 121 tile-parts), so this is dormant. If a future product family uses denser tiling, `extractTileLengths` would silently parse only the first TLM and the planner would throw `tile index out of TLM range` on out-of-bounds tile requests — failure is loud, not silent. Fix would extend `findMarker` to a sweep, sort segments by `Ztlm`, concatenate.
+- **Multi-segment PLT support inside `fetchTilePartTrimmed`.** A tile-part with many packets may split its PLT into multiple segments. The current probe parses only the PLT segment(s) it can see; if `keepPackets` exceeds the visible packet-length count the helper falls back to a full-range fetch. Lifting this would let the helper issue a second probe targeting the next PLT segment — useful for codestreams with very deep precinct partitioning.
 - **Web Worker wrapper.** Decode is fast (50–300 ms per typical tile) but blocking. For a smoother UX with many concurrent tiles, run decoding off the main thread. The WASM module is structured-cloneable; STEX's COG path already has a worker harness to mirror.
-- **AbortSignal in `RangeFetcher`.** Tile cancellation on quick pan would benefit from passing OL's `AbortSignal` through to the fetcher. Easy addition; gated on demand.
+- **AbortSignal in `RangeFetcher`.** Tile cancellation on quick pan would benefit from passing OL's `AbortSignal` through to the fetcher. Easy addition; gated on demand. (STEX threads its own signal to the underlying `fetch()` via a fetcher wrapper today.)
 
 ### Out of scope (not planned)
 
