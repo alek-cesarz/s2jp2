@@ -4,7 +4,7 @@
 
 `fetchAndDecodeWindow` today issues `Promise.all` of `fetchTilePartTrimmed` per intersecting tile-part. Each call:
 
-1. Probes 4 KB to discover the PLT
+1. Probes 32 KB to discover the PLT
 2. Fetches the remainder
 
 For an OL viewport tile that intersects 4 JP2 tile-parts × 3 RGB channels = 12 tile-parts, that's **24 HTTP requests** per OL tile, all paying the per-request handshake / SigV4 / S3 lookup overhead (≈500 ms on CDSE's s3-proxy regardless of size).
@@ -25,7 +25,7 @@ JP2 tile-parts are stored in raster order in the codestream — row-adjacent til
 
 ### Per-group probe size
 
-64 KB instead of the per-tile-part default of 4 KB. Reason: at group scope, the probe must cover the headers of every tile-part in the group, plus enough of each tile-part's data to cover packet bytes the caller wants. 64 KB is comfortably larger than the typical sum of (per-tile-part header ~200 B + low-overview packet bytes ~few KB) for a group of 4-8 tile-parts.
+64 KB instead of the per-tile-part default of 32 KB. Reason: at group scope, the probe must cover the headers of every tile-part in the group, plus enough of each tile-part's data to cover packet bytes the caller wants. 64 KB is comfortably larger than the typical sum of (per-tile-part header ~200 B + low-overview packet bytes ~few KB) for a group of 4-8 tile-parts.
 
 This costs at most ~64 KB per group at high overview (where we'd otherwise have fetched much less in total), but eliminates one RTT per tile-part in the group. At CDSE latencies the RTT savings dominate.
 

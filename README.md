@@ -162,7 +162,7 @@ interface DecodeResult {
 
 The window is specified in **full-resolution source pixels** (i.e. the UTM grid the SIZ marker declares). At `overviewLevel = 3` the decoder shrinks to 1/8 — so a 2048×2048 window decodes to 256×256.
 
-Per-tile-part bytes are PLT-trimmed: for each intersecting tile-part the library issues a probe (default 4 KB), parses the PLT marker to learn per-packet byte lengths, and fetches only the prefix of bytes the requested overview level actually decodes. At reduce-level 4 with `keepPackets = 1` this cuts per-tile-part bandwidth from ~MB to ~KB. Pass `tilePartProbeBytes` to override the default — only needed for codestreams with unusually many packets per tile-part.
+Per-tile-part bytes are PLT-trimmed: for each intersecting tile-part the library issues a probe (default 32 KB), parses the PLT marker to learn per-packet byte lengths, and fetches only the prefix of bytes the requested overview level actually decodes. At reduce-level 4 with `keepPackets = 1` this cuts per-tile-part bandwidth from ~MB to ~KB. Pass `tilePartProbeBytes` to override the default — only needed for codestreams with unusually many packets per tile-part.
 
 ### `fetchTilePartTrimmed(fetcher, options) → Uint8Array`
 
@@ -173,7 +173,7 @@ interface FetchTilePartTrimmedOptions {
   range: { start: number; end: number };       // tile-part byte range (from TLM)
   keepPackets: number;                         // packets to keep (from planWindowFetches)
   totalPackets: number;                        // total packets per tile-part
-  probeBytes?: number;                         // default DEFAULT_TILE_PART_PROBE (4 KB)
+  probeBytes?: number;                         // default DEFAULT_TILE_PART_PROBE (32 KB)
 }
 ```
 

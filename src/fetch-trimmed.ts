@@ -9,7 +9,7 @@
  * S3 just to throw most away on arrival.
  *
  * `fetchTilePartTrimmed` instead:
- *   1. Probes the first N bytes of the tile-part (default 4 KB) — enough
+ *   1. Probes the first N bytes of the tile-part (default 32 KB) — enough
  *      to contain SOT + PLT(s) + SOD for any S2 tile-part.
  *   2. Parses the PLT to compute the exact byte count needed for
  *      `keepPackets`.
@@ -46,7 +46,7 @@ export interface FetchTilePartTrimmedOptions {
   keepPackets: number;
   /** Total packets per tile-part (from `planWindowFetches`'s `totalPackets`). */
   totalPackets: number;
-  /** Probe size override. Defaults to `DEFAULT_TILE_PART_PROBE` (4 KB). */
+  /** Probe size override. Defaults to `DEFAULT_TILE_PART_PROBE` (32 KB). */
   probeBytes?: number;
 }
 

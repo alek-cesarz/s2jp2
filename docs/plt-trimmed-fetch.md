@@ -20,7 +20,7 @@ For a typical S2 B04_10m tile-part (~0.95 MB), at overview level 4 we want ~4-20
 
 Two-phase fetch per tile-part:
 
-1. **Probe** the first ~4 KB of the tile-part. This is large enough to contain the SOT + PLT(s) + SOD markers for any S2 tile-part.
+1. **Probe** the first ~32 KB of the tile-part. This is large enough to contain the SOT + PLT(s) + SOD markers for any S2 tile-part end-to-end for the 60m and 20m variants (so the probe doubles as the data read), and for the 10m variant it discovers the PLT in one round trip.
 2. Parse the probe to:
    - Locate `SOD` (`sodOffset`)
    - Extract the per-packet byte lengths from the PLT marker(s) (`extractPacketLengths`)
@@ -40,7 +40,7 @@ All edge cases degrade gracefully to the current behavior — never crash.
 
 ## API
 
-`fetchAndDecodeWindow` keeps the same signature. New `tilePartProbeBytes` option on `FetchAndDecodeOptions` (default 4096) for testing / unusual products.
+`fetchAndDecodeWindow` keeps the same signature. New `tilePartProbeBytes` option on `FetchAndDecodeOptions` (default 32768) for testing / unusual products.
 
 Internal helper `fetchTilePartTrimmed(fetcher, range, keepPackets, totalPackets, probeBytes)` does the work; `pipeline.ts` calls it per tile-part.
 
@@ -48,7 +48,7 @@ Internal helper `fetchTilePartTrimmed(fetcher, range, keepPackets, totalPackets,
 
 For S2 L2A B04_10m at overview level 4:
 - Before: ~0.95 MB per tile-part × 16 tile-parts × 3 channels = ~46 MB per OL tile
-- After: ~4 KB probe + ~1-4 KB remainder ≈ ~5-8 KB per tile-part × 16 × 3 = ~250-400 KB per OL tile
+- After: probe-only (32 KB covers PLT + needed payload at low overview for 10 m) ≈ ~5-32 KB per tile-part × 16 × 3 = ~250 KB-1.5 MB per OL tile
 
 ~150-200× reduction on per-tile bandwidth at low zoom.
 
