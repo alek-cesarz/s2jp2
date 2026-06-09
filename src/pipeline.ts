@@ -1,5 +1,11 @@
 import { loadDecoder } from './decoder/decoder.js';
 import type { DecodeResult, Decoder } from './decoder/decoder.js';
+import {
+  fetchTilePartGroupCoalesced,
+  groupContiguousTileParts,
+  DEFAULT_GROUP_PROBE_BYTES,
+  DEFAULT_MAX_COALESCE_GAP,
+} from './fetch-coalesced.js';
 import { fetchTilePartTrimmed } from './fetch-trimmed.js';
 import { inspectAsset } from './inspect.js';
 import type { AssetDescriptor } from './inspect.js';
@@ -24,8 +30,23 @@ export interface FetchAndDecodeOptions {
    * Per-tile-part probe size for PLT-trimmed fetching. Default 4 KB — enough
    * to hold SOT + PLT(s) + SOD for any S2 tile-part. Increase only for
    * codestreams with unusually many packets per tile-part.
+   *
+   * Only used when coalescing is disabled (`groupProbeBytes: 0`) or when
+   * the coalesced path falls back to the per-tile-part path.
    */
   tilePartProbeBytes?: number;
+  /**
+   * Per-group probe size for coalesced fetching. Default 64 KB. Pass `0`
+   * to disable coalescing entirely (one fetch per tile-part). Bigger
+   * values capture more tile-parts in one slab at the cost of a larger
+   * over-fetch when overview level is high.
+   */
+  groupProbeBytes?: number;
+  /**
+   * Tile-parts whose byte gap is ≤ this value are grouped into one
+   * coalesced fetch. Default 64 KB.
+   */
+  maxCoalesceGap?: number;
 }
 
 const DEFAULT_HEADER_PROBE = 100 * 1024;
@@ -54,23 +75,59 @@ export async function fetchAndDecodeWindow(
 
   const plan = planWindowFetches(descriptor, options.window, options.overviewLevel);
 
-  // PLT-trimmed per-tile-part fetches. Each call probes + (optionally)
-  // fetches the remainder, returning bytes equivalent to truncating a
-  // full fetch but sized to what's actually consumed. Falls back to
-  // full-tile-part fetching on PLT-parsing edge cases.
-  const payloads: Uint8Array[] = await Promise.all(
-    plan.tileRanges.map((range) => {
-      const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
-        range,
-        keepPackets: plan.keepPackets,
-        totalPackets: plan.totalPackets,
-      };
-      if (options.tilePartProbeBytes !== undefined) {
-        opts.probeBytes = options.tilePartProbeBytes;
+  const groupProbe = options.groupProbeBytes ?? DEFAULT_GROUP_PROBE_BYTES;
+  const maxGap = options.maxCoalesceGap ?? DEFAULT_MAX_COALESCE_GAP;
+
+  let payloads: Uint8Array[];
+  if (groupProbe === 0) {
+    // Coalescing disabled — fall back to per-tile-part PLT-trimmed fetches.
+    payloads = await Promise.all(
+      plan.tileRanges.map((range) => {
+        const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
+          range,
+          keepPackets: plan.keepPackets,
+          totalPackets: plan.totalPackets,
+        };
+        if (options.tilePartProbeBytes !== undefined) {
+          opts.probeBytes = options.tilePartProbeBytes;
+        }
+        return fetchTilePartTrimmed(fetcher, opts);
+      }),
+    );
+  } else {
+    // Coalesce contiguous tile-parts and issue one probe (+ optional
+    // corrective) per group. S2 tile-parts are stored in raster order so the
+    // tile-parts intersecting an OL viewport tile usually form one or two
+    // groups — much fewer HTTP requests than per-tile-part fetching.
+    const groups = groupContiguousTileParts(plan.tileRanges, maxGap);
+    const groupedPayloads = await Promise.all(
+      groups.map((group) =>
+        fetchTilePartGroupCoalesced(fetcher, {
+          group,
+          keepPackets: plan.keepPackets,
+          totalPackets: plan.totalPackets,
+          probeBytes: groupProbe,
+        }),
+      ),
+    );
+    // Reorder back to plan.tileRanges order (groupContiguousTileParts sorts
+    // by start which is also the file order, but the planner may have its
+    // own order tied to the window — index by tile-part identity).
+    const byRange = new Map<string, Uint8Array>();
+    let g = 0;
+    for (const group of groups) {
+      const payloads = groupedPayloads[g++]!;
+      for (let i = 0; i < group.tileParts.length; i++) {
+        const tp = group.tileParts[i]!;
+        byRange.set(`${tp.start}:${tp.end}`, payloads[i]!);
       }
-      return fetchTilePartTrimmed(fetcher, opts);
-    }),
-  );
+    }
+    payloads = plan.tileRanges.map((r) => {
+      const v = byRange.get(`${r.start}:${r.end}`);
+      if (!v) throw new Error('coalesced: tile-part missing from grouped payloads');
+      return v;
+    });
+  }
 
   const codestream = stitchPartialCodestream(descriptor.header, payloads);
   return decoder.decode(codestream, {

@@ -43,3 +43,14 @@ export type { FetchAndDecodeOptions, RangeFetcher } from './pipeline.js';
 
 export { DEFAULT_TILE_PART_PROBE, fetchTilePartTrimmed } from './fetch-trimmed.js';
 export type { FetchTilePartTrimmedOptions } from './fetch-trimmed.js';
+
+export {
+  DEFAULT_GROUP_PROBE_BYTES,
+  DEFAULT_MAX_COALESCE_GAP,
+  fetchTilePartGroupCoalesced,
+  groupContiguousTileParts,
+} from './fetch-coalesced.js';
+export type {
+  FetchTilePartGroupCoalescedOptions,
+  TilePartGroup,
+} from './fetch-coalesced.js';

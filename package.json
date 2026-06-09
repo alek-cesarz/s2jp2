@@ -1,6 +1,6 @@
 {
   "name": "s2jp2",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sentinel-2 JPEG 2000 marker parsing + windowed WASM decode",
   "type": "module",
   "main": "./dist/index.js",
