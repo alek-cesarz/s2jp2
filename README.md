@@ -8,7 +8,7 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
 
 1. **Read only the bytes needed** for a requested window at a requested zoom level. Two layers of byte trimming work together:
    - **TLM (Tile-part Length) markers** tell us which tile-parts the window intersects and where they live in the file — no scanning from byte zero.
-   - **PLT (Packet Length Table) markers** inside each tile-part declare per-packet byte sizes. For each tile-part we read a small probe (~4 KB) containing the PLT, compute the byte prefix that holds the packets needed for the requested overview level, then fetch only that prefix. At reduce-level 4 this cuts per-tile-part bandwidth from ~MB to ~KB.
+   - **PLT (Packet Length Table) markers** inside each tile-part declare per-packet byte sizes. For each tile-part we read a small probe (~32 KB) containing the PLT, compute the byte prefix that holds the packets needed for the requested overview level, then fetch only that prefix. At reduce-level 4 this cuts per-tile-part bandwidth from ~MB to ~KB.
 
    We compute the byte ranges, ask a consumer-supplied `RangeFetcher` to retrieve them, stitch a partial JPEG 2000 codestream, and decode.
 2. **Decode at native precision in the browser.** A vendored OpenJPEG 2.5.3 WASM (247 KB) exposes `cp_reduce` (resolution reduction) and `opj_set_decode_area` (windowed decode) — the two APIs the popular `@cornerstonejs/codec-openjpeg` package doesn't expose. Output is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and `Uint16Array` for 16-bit assets (reflectance bands / AOT / WVP).
@@ -95,7 +95,7 @@ import {
   planWindowFetches,               // descriptor + window + level → FetchPlan
   fetchAndDecodeWindow,            // one-shot end-to-end
   fetchTilePartTrimmed,            // PLT-trimmed two-phase fetch for a single tile-part
-  DEFAULT_TILE_PART_PROBE,         // 4 KB — the default per-tile-part probe size
+  DEFAULT_TILE_PART_PROBE,         // 32 KB — the default per-tile-part probe size
   loadDecoder,                     // load the WASM (once per session)
   Decoder,
   type AssetDescriptor,
@@ -148,7 +148,7 @@ interface FetchAndDecodeOptions {
   descriptor?: AssetDescriptor;                // reuse across calls — avoids re-parsing header
   decoder?: Decoder;                           // reuse across calls — WASM load is ~200 ms
   headerProbeBytes?: number;                   // default 100 KB (one-time, on first call)
-  tilePartProbeBytes?: number;                 // default 4 KB (per tile-part, every call)
+  tilePartProbeBytes?: number;                 // default 32 KB (per tile-part, every call)
 }
 
 interface DecodeResult {

@@ -27,12 +27,15 @@ export interface FetchAndDecodeOptions {
   /** Reusable decoder (the WASM module loads ~200 ms; cache when possible). */
   decoder?: Decoder;
   /**
-   * Per-tile-part probe size for PLT-trimmed fetching. Default 4 KB — enough
-   * to hold SOT + PLT(s) + SOD for any S2 tile-part. Increase only for
-   * codestreams with unusually many packets per tile-part.
+   * Per-tile-part probe size for PLT-trimmed fetching. Default 32 KB —
+   * sized to encompass typical 60m / 20m tile-parts in a single fetch
+   * so the probe doubles as the data read (no remainder needed). For
+   * larger 10m tile-parts the probe still discovers the PLT in one
+   * round trip then a corrective fetch reads only the keepPackets-
+   * worth of payload.
    *
-   * Only used when coalescing is disabled (`groupProbeBytes: 0`) or when
-   * the coalesced path falls back to the per-tile-part path.
+   * Only used when coalescing is disabled (`groupProbeBytes: 0`) or
+   * when the coalesced path falls back to the per-tile-part path.
    */
   tilePartProbeBytes?: number;
   /**

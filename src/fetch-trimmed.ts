@@ -24,13 +24,20 @@ import { extractPacketLengths, sodOffset, truncateToPackets } from './markers/pl
 import type { RangeFetcher } from './pipeline.js';
 
 /**
- * 4 KB is comfortably larger than any S2 tile-part header. SOT (12 bytes)
- * + PLT (4-byte header + 1-2 bytes per packet × ~20 packets) + SOD (2 bytes)
- * stays well under 200 bytes for typical S2 codestreams. A larger probe
- * costs nothing on a cold S3 read (HTTP overhead dominates below ~64 KB)
- * and provides margin for products with many packets per tile-part.
+ * 32 KB probe. Big enough to contain every typical S2 tile-part end-to-end
+ * for the 60m + 20m variants (whose tile-parts run 5-30 KB on real
+ * fixtures) — collapsing the probe+remainder pair into a single request.
+ * For the 10m variant (tile-parts ~0.5-2 MB) the probe still discovers
+ * the PLT in one round trip then a corrective fetch reads only what
+ * keepPackets covers.
+ *
+ * The S2 tile-part header itself is well under 200 bytes (SOT 12 + PLT
+ * 4-byte header + 1-2 bytes per packet × ~20 packets + SOD 2). HTTP
+ * overhead dominates below ~64 KB on CDSE's s3-proxy, so the 28 KB
+ * over-fetch on large tile-parts is essentially free relative to the
+ * round-trip savings on small ones.
  */
-export const DEFAULT_TILE_PART_PROBE = 4 * 1024;
+export const DEFAULT_TILE_PART_PROBE = 32 * 1024;
 
 export interface FetchTilePartTrimmedOptions {
   /** Byte range of the tile-part from TLM. `end` is exclusive. */
