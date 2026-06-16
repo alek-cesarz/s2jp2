@@ -11,7 +11,7 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
    - **PLT (Packet Length Table) markers** inside each tile-part declare per-packet byte sizes. For each tile-part we read a small probe (~32 KB) containing the PLT, compute the byte prefix that holds the packets needed for the requested overview level, then fetch only that prefix. At reduce-level 4 this cuts per-tile-part bandwidth from ~MB to ~KB.
 
    We compute the byte ranges, ask a consumer-supplied `RangeFetcher` to retrieve them, stitch a partial JPEG 2000 codestream, and decode.
-2. **Decode at native precision in the browser.** A vendored OpenJPEG 2.5.3 WASM (247 KB) exposes `cp_reduce` (resolution reduction) and `opj_set_decode_area` (windowed decode) — the two APIs the popular `@cornerstonejs/codec-openjpeg` package doesn't expose. Output is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and `Uint16Array` for 16-bit assets (reflectance bands / AOT / WVP).
+2. **Decode at native precision in the browser.** A vendored OpenJPEG 2.5.4 WASM (245 KB) exposes `cp_reduce` (resolution reduction) and `opj_set_decode_area` (windowed decode) — the two APIs the popular `@cornerstonejs/codec-openjpeg` package doesn't expose. Output is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and `Uint16Array` for 16-bit assets (reflectance bands / AOT / WVP).
 3. **Stay out of the way.** No I/O is bundled; the consumer provides a `RangeFetcher` interface. That keeps STEX's existing S3 SigV4 + nginx proxy plumbing in charge of network and auth.
 
 ## Status
@@ -24,7 +24,7 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
   | 256 × 256 | L=2 | 64×64 | ~70 ms |
   | 2048 × 2048 | L=3 | 256×256 | 113 ms |
   | 2048 × 2048 | L=2 | 512×512 | 298 ms |
-- **Bundle size:** 247 KB WASM + 46 KB JS glue + ~30 KB of TS (compiled). No runtime dependencies.
+- **Bundle size:** 245 KB WASM + 46 KB JS glue + ~30 KB of TS (compiled). No runtime dependencies.
 - **Tests:** 87 tests across 11 files; real CDSE fixtures (TCI 10 m + B04 60 m) exercise every layer end-to-end, plus synthetic tile-parts exercise the PLT-trimmed fetch paths.
 - **Fetch trimming** (typical S2 B04_10m tile-part at reduce-level 4, ~20 packets per tile-part):
   | Strategy | Bytes per tile-part |
@@ -54,7 +54,7 @@ Sentinel-2 L1C and L2A products are distributed as JP2 files. A 10 m TCI is 125 
                │                                  │
                ▼                                  ▼
        ┌───────────────┐                  ┌─────────────────┐
-       │ Marker parsers│                  │ OpenJPEG 2.5.3  │
+       │ Marker parsers│                  │ OpenJPEG 2.5.4  │
        │ (siz/cod/tlm/ │                  │ WASM            │
        │  plt/codestream)│                │ (cp_reduce +    │
        │ + window math │                  │  decode_area)   │
@@ -80,7 +80,7 @@ src/
 ├── fetch-trimmed.ts         fetchTilePartTrimmed (PLT-trimmed two-phase tile-part read)
 ├── decoder/
 │   ├── decoder.ts           Decoder class (typed TS facade)
-│   ├── stex-jp2.wasm        Vendored OpenJPEG 2.5.3 build
+│   ├── stex-jp2.wasm        Vendored OpenJPEG 2.5.4 build
 │   ├── stex-jp2.mjs         Emscripten glue
 │   └── stex-jp2.d.mts       Type stub for the glue
 ├── pipeline.ts              fetchAndDecodeWindow (end-to-end orchestration)
@@ -391,7 +391,7 @@ npm run build
 ```bash
 # Prerequisites (one-time):
 #   1. emsdk at ~/emsdk (https://emscripten.org/docs/getting_started/downloads.html)
-#   2. OpenJPEG 2.5.3 cloned + built as a static .a library, accessible at
+#   2. OpenJPEG 2.5.4 cloned + built as a static .a library, accessible at
 #      ../openjpeg/build-wasm/bin/libopenjp2.a relative to this repo
 #      (a symlink works fine)
 
@@ -406,4 +406,4 @@ The wrapper source is `wrapper/jp2.cpp` (≈300 LOC of embind glue). Modify it i
 - **JPEG 2000 spec:** ITU-T Rec. T.800 / ISO/IEC 15444-1.
 - **S2 PSD:** [Sentinel-2 Products Specification Document](https://sentinels.copernicus.eu/documents/d/sentinel/sentinel-2-products-specification-document-15_1) — TLM marker was added in baseline `N0500`.
 - **Reference implementation (Rust):** `s2surgeon` — the inline byte-level logic was ported from there; the `validateS2N0512Capability` predicate is intentionally looser than s2surgeon's hardcoded TCI 10 m profile.
-- **OpenJPEG:** [uclouvain/openjpeg](https://github.com/uclouvain/openjpeg) 2.5.3.
+- **OpenJPEG:** [uclouvain/openjpeg](https://github.com/uclouvain/openjpeg) 2.5.4.
