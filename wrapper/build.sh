@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rebuilds stex-jp2.wasm + stex-jp2.mjs from wrapper/jp2.cpp.
-# Assumes emsdk is at ~/emsdk and OpenJPEG 2.5.3 is cloned next to this repo
+# Assumes emsdk is at ~/emsdk and OpenJPEG 2.5.4 is cloned next to this repo
 # at ../openjpeg with build-wasm/bin/libopenjp2.a already produced.
 set -euo pipefail
 source "$HOME/emsdk/emsdk_env.sh"
