@@ -98,7 +98,8 @@ DecodeResult decode(const emscripten::val& encoded,
                     std::int32_t areaX0,
                     std::int32_t areaY0,
                     std::int32_t areaX1,
-                    std::int32_t areaY1) {
+                    std::int32_t areaY1,
+                    bool tolerant) {
     DecodeResult out;
 
     const std::uint32_t encLen = encoded["length"].as<std::uint32_t>();
@@ -144,6 +145,11 @@ DecodeResult decode(const emscripten::val& encoded,
         if (out.error_.empty()) out.error_ = "opj_setup_decoder failed";
         return out;
     }
+
+    // Tolerant mode: decode truncated / PLT-trimmed codestreams instead of
+    // hard-failing when trailing packets or tile-parts are missing. OpenJPEG
+    // defaults to strict mode (j2k.c: m_cp.strict = OPJ_TRUE).
+    opj_decoder_set_strict_mode(codec, tolerant ? OPJ_FALSE : OPJ_TRUE);
 
     opj_image_t* image = nullptr;
     if (!opj_read_header(opj_stream, codec, &image)) {
