@@ -14,6 +14,7 @@ interface StexJp2DecodeResult {
   height(): number;
   numComponents(): number;
   bitsPerSample(): number;
+  reduceLevel(): number;
   pixels(): Uint8Array | Uint16Array;
 }
 
@@ -33,6 +34,9 @@ export interface DecodeResult {
   height: number;
   numComponents: number;
   bitsPerSample: number;
+  /** The reduce factor actually applied, after clamping to the number of
+   *  resolution levels present (<= options.reduceLevel). */
+  reduceLevel: number;
 }
 
 export class Decoder {
@@ -70,6 +74,7 @@ export class Decoder {
       height: result.height(),
       numComponents: result.numComponents(),
       bitsPerSample: result.bitsPerSample(),
+      reduceLevel: result.reduceLevel(),
     };
   }
 }

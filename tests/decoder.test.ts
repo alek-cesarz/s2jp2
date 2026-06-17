@@ -18,6 +18,7 @@ describe.runIf(existsSync(TCI))('Decoder (TCI 10m uint8 RGB)', () => {
     expect(r.bitsPerSample).toBe(8);
     expect(r.pixels).toBeInstanceOf(Uint8Array);
     expect(r.pixels.byteLength).toBe(687 * 687 * 3);
+    expect(r.reduceLevel).toBe(4);
   });
 
   it('decodes a 2048×2048 window at cp_reduce=3 → 256×256 uint8 RGB', async () => {
@@ -32,6 +33,7 @@ describe.runIf(existsSync(TCI))('Decoder (TCI 10m uint8 RGB)', () => {
     expect(r.numComponents).toBe(3);
     expect(r.bitsPerSample).toBe(8);
     expect(r.pixels).toBeInstanceOf(Uint8Array);
+    expect(r.reduceLevel).toBe(3);
   });
 });
 
@@ -48,6 +50,7 @@ describe.runIf(existsSync(B04))('Decoder (B04 60m single-band uint16)', () => {
     expect(r.bitsPerSample).toBeGreaterThan(8);
     expect(r.pixels).toBeInstanceOf(Uint16Array);
     expect(r.pixels.length).toBe(1830 * 1830);
+    expect(r.reduceLevel).toBe(0);
   });
 });
 
@@ -57,6 +60,23 @@ describe('Decoder error surfacing', () => {
     expect(() =>
       decoder.decode(new Uint8Array([0, 0, 0, 0]), { reduceLevel: 0 }),
     ).toThrow(/decode/i);
+  });
+});
+
+describe.runIf(existsSync(B04))('Decoder reduce clamping', () => {
+  it('clamps an over-large reduce factor instead of failing', async () => {
+    const decoder = await loadDecoder();
+    const data = readFileSync(B04);
+    const u8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+
+    // 99 is far beyond any S2 asset's resolution-level count. Without clamping
+    // OpenJPEG hard-errors; with clamping it falls back to the coarsest overview.
+    const r = decoder.decode(u8, { reduceLevel: 99 });
+    expect(r.reduceLevel).toBeLessThan(99);
+    expect(r.reduceLevel).toBeGreaterThanOrEqual(0);
+    expect(r.width).toBeGreaterThan(0);
+    expect(r.width).toBeLessThan(1830); // coarser than full 60 m resolution
+    expect(r.pixels.length).toBe(r.width * r.height * r.numComponents);
   });
 });
 

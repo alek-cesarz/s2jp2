@@ -1,5 +1,6 @@
-// Minimal embind wrapper around libopenjp2 exposing cp_reduce (resolution
-// factor) AND opj_set_decode_area (windowed decode). Returns pixels in their
+// Minimal embind wrapper around libopenjp2 exposing a clamped resolution
+// factor (via opj_set_decoded_resolution_factor, applied after opj_read_header)
+// AND opj_set_decode_area (windowed decode). Returns pixels in their
 // native precision: Uint8Array for prec<=8 (TCI / SCL / CLD / SNW), Uint16Array
 // for prec>8 (reflectance bands / AOT / WVP).
 //
@@ -80,6 +81,7 @@ public:
     std::uint32_t height() const { return height_; }
     std::uint32_t numComponents() const { return numComps_; }
     std::uint32_t bitsPerSample() const { return bitsPerSample_; }
+    std::uint32_t reduceLevel() const { return appliedReduce_; }
     std::string error() const { return error_; }
     bool ok() const { return error_.empty(); }
 
@@ -89,6 +91,7 @@ public:
     std::uint32_t height_{0};
     std::uint32_t numComps_{0};
     std::uint32_t bitsPerSample_{0};
+    std::uint32_t appliedReduce_{0};
     std::string error_;
 };
 
@@ -138,7 +141,9 @@ DecodeResult decode(const emscripten::val& encoded,
 
     opj_dparameters_t params;
     opj_set_default_decoder_parameters(&params);
-    params.cp_reduce = reduceLevel;
+    // Reduce factor is applied AFTER opj_read_header via
+    // opj_set_decoded_resolution_factor so it can be clamped to the number of
+    // resolution levels the codestream actually carries (see below).
     if (!opj_setup_decoder(codec, &params)) {
         opj_destroy_codec(codec);
         opj_stream_destroy(opj_stream);
@@ -159,6 +164,33 @@ DecodeResult decode(const emscripten::val& encoded,
         if (out.error_.empty()) out.error_ = "opj_read_header failed";
         return out;
     }
+
+    // Clamp the requested reduce factor down to the deepest overview present.
+    // opj_set_decoded_resolution_factor() emits an EVT_ERROR and returns false
+    // when res_factor >= numresolutions, so suppress the error handler during
+    // the probe (these failures are expected) and decrement until it sticks.
+    opj_set_error_handler(codec, msg_quiet, nullptr);
+    std::uint32_t applied = reduceLevel;
+    bool factorOk = false;
+    for (;;) {
+        if (opj_set_decoded_resolution_factor(codec, applied)) {
+            factorOk = true;
+            break;
+        }
+        if (applied == 0) {
+            break;
+        }
+        --applied;
+    }
+    opj_set_error_handler(codec, msg_error, &out.error_);
+    if (!factorOk) {
+        opj_image_destroy(image);
+        opj_destroy_codec(codec);
+        opj_stream_destroy(opj_stream);
+        out.error_ = "opj_set_decoded_resolution_factor failed";
+        return out;
+    }
+    out.appliedReduce_ = applied;
 
     if (useArea) {
         if (!opj_set_decode_area(codec, image, areaX0, areaY0, areaX1, areaY1)) {
@@ -265,6 +297,7 @@ EMSCRIPTEN_BINDINGS(stex_jp2) {
         .function("height", &DecodeResult::height)
         .function("numComponents", &DecodeResult::numComponents)
         .function("bitsPerSample", &DecodeResult::bitsPerSample)
+        .function("reduceLevel", &DecodeResult::reduceLevel)
         .function("error", &DecodeResult::error)
         .function("ok", &DecodeResult::ok);
 
