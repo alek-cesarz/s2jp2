@@ -4,6 +4,7 @@ interface StexJp2Module {
     reduceLevel: number,
     useArea: boolean,
     x0: number, y0: number, x1: number, y1: number,
+    tolerant: boolean,
   ): StexJp2DecodeResult;
 }
 interface StexJp2DecodeResult {
@@ -13,6 +14,7 @@ interface StexJp2DecodeResult {
   height(): number;
   numComponents(): number;
   bitsPerSample(): number;
+  reduceLevel(): number;
   pixels(): Uint8Array | Uint16Array;
 }
 
@@ -22,6 +24,9 @@ export interface DecodeArea {
 export interface DecodeOptions {
   reduceLevel?: number;
   decodeArea?: DecodeArea;
+  /** Decode truncated / PLT-trimmed codestreams instead of failing when
+   *  trailing packets are missing. Defaults to true (the streaming use case). */
+  tolerant?: boolean;
 }
 export interface DecodeResult {
   pixels: Uint8Array | Uint16Array;
@@ -29,6 +34,9 @@ export interface DecodeResult {
   height: number;
   numComponents: number;
   bitsPerSample: number;
+  /** The reduce factor actually applied, after clamping to the number of
+   *  resolution levels present (<= options.reduceLevel). */
+  reduceLevel: number;
 }
 
 export class Decoder {
@@ -44,12 +52,14 @@ export class Decoder {
 
   decode(encoded: Uint8Array, options: DecodeOptions = {}): DecodeResult {
     const reduce = options.reduceLevel ?? 0;
+    const tolerant = options.tolerant ?? true;
     const area = options.decodeArea;
     const result = this.module.decode(
       encoded,
       reduce,
       area !== undefined,
       area?.x0 ?? 0, area?.y0 ?? 0, area?.x1 ?? 0, area?.y1 ?? 0,
+      tolerant,
     );
     if (!result.ok()) {
       throw new Error(`JP2 decode failed: ${result.error() || 'unknown error'}`);
@@ -64,6 +74,7 @@ export class Decoder {
       height: result.height(),
       numComponents: result.numComponents(),
       bitsPerSample: result.bitsPerSample(),
+      reduceLevel: result.reduceLevel(),
     };
   }
 }
