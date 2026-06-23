@@ -1,6 +1,6 @@
 {
   "name": "s2jp2",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Sentinel-2 JPEG 2000 marker parsing + windowed WASM decode",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,7 +10,11 @@
     "./decoder/stex-jp2.wasm": "./src/decoder/stex-jp2.wasm",
     "./decoder/stex-jp2.mjs": "./src/decoder/stex-jp2.mjs"
   },
-  "files": ["dist", "src/decoder/stex-jp2.wasm", "src/decoder/stex-jp2.mjs"],
+  "files": [
+    "dist",
+    "src/decoder/stex-jp2.wasm",
+    "src/decoder/stex-jp2.mjs"
+  ],
   "scripts": {
     "build": "tsc && npm run copy:wasm",
     "copy:wasm": "mkdir -p dist/decoder && cp src/decoder/stex-jp2.wasm src/decoder/stex-jp2.mjs dist/decoder/",
@@ -25,5 +29,7 @@
     "vitest": "^2.0.0",
     "@types/node": "^20.0.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

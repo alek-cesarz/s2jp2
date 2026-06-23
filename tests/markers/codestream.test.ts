@@ -19,6 +19,30 @@ describe('SOC / SOT scanning', () => {
     expect(socOffset(new Uint8Array([0, 1, 2, 3]))).toBe(-1);
     expect(firstSotOffset(new Uint8Array([0, 1, 2, 3]))).toBe(-1);
   });
+
+  it('skips a spurious FF 90 inside a marker-segment payload (real-world: S2 T34SEG)', () => {
+    // A main-header marker segment whose PAYLOAD contains the bytes FF 90 00 70
+    // (not a real SOT). A naive byte-scan returns that offset, anchoring every
+    // tile-part 56 bytes too early. firstSotOffset must walk markers by length
+    // and return the REAL SOT at the segment boundary.
+    const buf = new Uint8Array([
+      0xff, 0x4f, // SOC @0
+      0xff, 0x51, 0x00, 0x0a, 0xaa, 0xbb, 0xff, 0x90, 0x00, 0x70, 0xcc, 0xdd, // SIZ @2, Lmar=10, payload has FF 90 00 70 @8
+      0xff, 0x90, 0x00, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, // real SOT @14
+    ]);
+    expect(firstSotOffset(buf)).toBe(14); // not 8 (the spurious FF 90)
+  });
+
+  it('returns the SOT offset for a clean header (marker-walk == byte-scan)', () => {
+    // SOC, SIZ (len 4), COD (len 3), then SOT — no spurious FF 90.
+    const buf = new Uint8Array([
+      0xff, 0x4f, // SOC @0
+      0xff, 0x51, 0x00, 0x04, 0xaa, 0xbb, // SIZ @2
+      0xff, 0x52, 0x00, 0x03, 0xcc, // COD @8
+      0xff, 0x90, 0x00, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, // SOT @13
+    ]);
+    expect(firstSotOffset(buf)).toBe(13);
+  });
 });
 
 describe('stitchPartialCodestream', () => {
