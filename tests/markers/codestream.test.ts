@@ -20,6 +20,17 @@ describe('SOC / SOT scanning', () => {
     expect(firstSotOffset(new Uint8Array([0, 1, 2, 3]))).toBe(-1);
   });
 
+  it('fallback signature scan skips a spurious FF 90 00 70 (no-SOC path)', () => {
+    // No SOC → firstSotOffset uses the signature-scan fallback. A bare FF 90
+    // scan would match the spurious FF 90 00 70; the FF 90 00 0A signature skips it.
+    const buf = new Uint8Array([
+      0x00, 0x00, 0xff, 0x90, 0x00, 0x70, 0x11, 0x22, // spurious FF 90 00 70 @2
+      0xff, 0x90, 0x00, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, // real SOT @8
+    ]);
+    expect(firstSotOffset(buf)).toBe(8);
+  });
+
+
   it('skips a spurious FF 90 inside a marker-segment payload (real-world: S2 T34SEG)', () => {
     // A main-header marker segment whose PAYLOAD contains the bytes FF 90 00 70
     // (not a real SOT). A naive byte-scan returns that offset, anchoring every

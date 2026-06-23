@@ -22,13 +22,16 @@ export function socOffset(data: Uint8Array): number {
  * FF 90 00 70 fifty-six bytes before the real SOT — which silently shifted
  * every TLM-derived tile-part range and broke the decode.
  *
- * Falls back to the linear scan when SOC is absent or the marker walk can't
- * complete (truncated/non-conformant header), preserving the old behaviour
- * for inputs that never had a clean main header to walk.
+ * Falls back to a signature scan when SOC is absent or the marker walk can't
+ * complete (truncated/non-conformant header). The fallback matches the full
+ * SOT signature `FF 90 00 0A` (the Lsot is always 0x000A) rather than a bare
+ * `FF 90`, so it cannot re-match the spurious `FF 90 00 70` inside a marker
+ * payload that motivated this rewrite — a 2-byte fallback would silently
+ * reintroduce the bug on the bail path.
  */
 export function firstSotOffset(data: Uint8Array): number {
   const soc = socOffset(data);
-  if (soc < 0) return findMarker(data, SOT[0], SOT[1]);
+  if (soc < 0) return scanForSot(data);
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let pos = soc + 2; // SOC itself carries no length field
   while (pos + 2 <= data.byteLength) {
@@ -42,9 +45,24 @@ export function firstSotOffset(data: Uint8Array): number {
     if (segLen < 2) break; // invalid Lmar
     pos += 2 + segLen;
   }
-  // Marker walk could not locate SOT — fall back to the linear scan so a
+  // Marker walk could not locate SOT — fall back to the signature scan so a
   // non-conformant header still has a chance rather than a hard failure.
-  return findMarker(data, SOT[0], SOT[1]);
+  return scanForSot(data);
+}
+
+/** Linear scan for the full SOT signature `FF 90 00 0A` (marker + Lsot). */
+function scanForSot(data: Uint8Array): number {
+  for (let i = 0; i + 3 < data.byteLength; i++) {
+    if (
+      data[i] === SOT[0] &&
+      data[i + 1] === SOT[1] &&
+      data[i + 2] === 0x00 &&
+      data[i + 3] === 0x0a
+    ) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 /** Slice between SOC and the first SOT. Throws if either is missing. */

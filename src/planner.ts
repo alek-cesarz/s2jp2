@@ -12,13 +12,20 @@ export interface Window {
 
 /**
  * Reliability floor (px) for the decoded tile dimension. Below this, a
- * PLT-trimmed reduced decode produces OpenJPEG boundary-clamp artifacts
- * (the "white cross"), so the planner reads full tile-parts instead. Chosen
- * so standard 1024 px tiles are never affected at any valid reduce level
- * (1024 >> 4 = 64) while small (≤512 px) tiles are read whole at the reduce
- * levels where the artifact appears.
+ * PLT-trimmed reduced decode of a small-tile product produces OpenJPEG
+ * boundary-clamp artifacts (the "white cross"), so the planner reads full
+ * tile-parts instead.
  */
 const MIN_RELIABLE_REDUCED_TILE = 64;
+/**
+ * Only small-tile products are affected. The artifact was observed on S2 60 m
+ * bands (192 px tiles); standard 10/20 m tiles are 1024 px and decode cleanly
+ * at every reduce level. Gating on the SOURCE tile size (not just the decoded
+ * dimension) keeps large-tile products on the bandwidth-saving trim path even
+ * at deep reduce levels — e.g. a 1024 px tile with 6 resolution levels at
+ * reduce 5 (1024 >> 5 = 32) must NOT be forced to a full read.
+ */
+const SMALL_TILE_PX = 512;
 
 export interface FetchPlan {
   tileIndices: number[];
@@ -47,14 +54,15 @@ export function planWindowFetches(
   // the codestream is PLT-trimmed: OpenJPEG's reduced inverse wavelet at the
   // tile boundary saturates the under-decoded coefficients to a clamp value,
   // producing a white cross along the tile seams. Such tiles are tiny, so
-  // reading the whole tile-part costs almost nothing — disable trimming when
-  // the decoded tile dimension falls below a reliability floor. Standard
-  // 1024 px tiles never trip this within their valid reduce range
-  // (1024 >> 4 = 64), so their PLT bandwidth savings are unaffected.
-  const tw = descriptor.siz.tileWidth;
-  const th = descriptor.siz.tileHeight;
-  if (tw > 0 && th > 0) {
-    const reducedTileMin = Math.min(tw, th) >> overviewLevel;
+  // reading the whole tile-part costs almost nothing — disable trimming when a
+  // SMALL-TILE product's decoded tile dimension falls below a reliability floor.
+  // Gating on the source tile size (`<= SMALL_TILE_PX`) keeps large-tile
+  // products (1024 px) on the trim path at every reduce level — including the
+  // deep levels of a ≥6-resolution asset where the post-reduce dimension alone
+  // would otherwise dip below the floor (1024 >> 5 = 32).
+  const tileMin = Math.min(descriptor.siz.tileWidth, descriptor.siz.tileHeight);
+  if (tileMin > 0 && tileMin <= SMALL_TILE_PX) {
+    const reducedTileMin = tileMin >> overviewLevel;
     if (reducedTileMin < MIN_RELIABLE_REDUCED_TILE) keepPackets = totalPackets;
   }
   const tileIndices = windowTileIndices(

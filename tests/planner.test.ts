@@ -82,4 +82,20 @@ describe('planWindowFetches — small-tile trim guard', () => {
     const plan = planWindowFetches(mkDesc(192), { x: 0, y: 0, width: 192, height: 192 }, 1);
     expect(plan.keepPackets).toBe(7); // cumulative[3]
   });
+  it('does NOT force a full read for large tiles at deep reduce (1024px, 6 resolutions, reduce 5)', () => {
+    // 1024 >> 5 = 32 < 64, but the SOURCE tile (1024) exceeds SMALL_TILE_PX,
+    // so a large-tile product keeps its PLT trim even at a deep reduce level.
+    const desc = {
+      siz: { imageWidth: 1024, imageHeight: 1024, tileWidth: 1024, tileHeight: 1024, numComponents: 1 },
+      numDecompLevels: 5,
+      numResolutions: 6,
+      packetTable: { packetsPerResolution: [1, 1, 1, 1, 4, 9], cumulativePackets: [1, 2, 3, 4, 8, 17] },
+      tileGrid: { imageWidth: 1024, imageHeight: 1024, tileWidth: 1024, tileHeight: 1024, tilesPerRow: 1, tilesPerCol: 1, totalTiles: 1, numComponents: 1 },
+      tileRanges: [{ start: 0, end: 1000 }],
+      header: new Uint8Array(0),
+    } as unknown as Parameters<typeof planWindowFetches>[0];
+    const plan = planWindowFetches(desc, { x: 0, y: 0, width: 1024, height: 1024 }, 5);
+    expect(plan.keepPackets).toBe(1); // cumulative[0]
+    expect(plan.keepPackets).toBeLessThan(plan.totalPackets);
+  });
 });
