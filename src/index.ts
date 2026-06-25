@@ -38,8 +38,8 @@ export type { FetchPlan, Window } from './planner.js';
 export { Decoder, loadDecoder } from './decoder/decoder.js';
 export type { DecodeArea, DecodeOptions, DecodeResult } from './decoder/decoder.js';
 
-export { fetchAndDecodeWindow } from './pipeline.js';
-export type { FetchAndDecodeOptions, RangeFetcher } from './pipeline.js';
+export { fetchAndDecodeWindow, fetchWindowCodestream } from './pipeline.js';
+export type { FetchAndDecodeOptions, RangeFetcher, WindowCodestream } from './pipeline.js';
 
 export { DEFAULT_TILE_PART_PROBE, fetchTilePartTrimmed } from './fetch-trimmed.js';
 export type { FetchTilePartTrimmedOptions } from './fetch-trimmed.js';

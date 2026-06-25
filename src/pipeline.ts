@@ -54,6 +54,86 @@ export interface FetchAndDecodeOptions {
 
 const DEFAULT_HEADER_PROBE = 100 * 1024;
 
+export interface WindowCodestream {
+  codestream: Uint8Array;
+  reduceLevel: number;
+  decodeArea: { x0: number; y0: number; x1: number; y1: number };
+}
+
+/** Fetch + assemble a window's JP2 codestream WITHOUT decoding it. Lets callers
+ *  run the expensive `decoder.decode` elsewhere (e.g. a Web Worker) while the
+ *  network + assembly stay on the calling thread. */
+export async function fetchWindowCodestream(
+  fetcher: RangeFetcher,
+  options: FetchAndDecodeOptions,
+): Promise<WindowCodestream> {
+  const descriptor =
+    options.descriptor ??
+    (await (async () => {
+      const header = await fetcher.fetchRange(0, options.headerProbeBytes ?? DEFAULT_HEADER_PROBE);
+      return inspectAsset(header);
+    })());
+
+  const plan = planWindowFetches(descriptor, options.window, options.overviewLevel);
+  const groupProbe = options.groupProbeBytes ?? DEFAULT_GROUP_PROBE_BYTES;
+  const maxGap = options.maxCoalesceGap ?? DEFAULT_MAX_COALESCE_GAP;
+
+  let payloads: Uint8Array[];
+  if (groupProbe === 0) {
+    payloads = await Promise.all(
+      plan.tileRanges.map((range) => {
+        const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
+          range,
+          keepPackets: plan.keepPackets,
+          totalPackets: plan.totalPackets,
+        };
+        if (options.tilePartProbeBytes !== undefined) {
+          opts.probeBytes = options.tilePartProbeBytes;
+        }
+        return fetchTilePartTrimmed(fetcher, opts);
+      }),
+    );
+  } else {
+    const groups = groupContiguousTileParts(plan.tileRanges, maxGap);
+    const groupedPayloads = await Promise.all(
+      groups.map((group) =>
+        fetchTilePartGroupCoalesced(fetcher, {
+          group,
+          keepPackets: plan.keepPackets,
+          totalPackets: plan.totalPackets,
+          probeBytes: groupProbe,
+        }),
+      ),
+    );
+    const byRange = new Map<string, Uint8Array>();
+    let g = 0;
+    for (const group of groups) {
+      const gp = groupedPayloads[g++]!;
+      for (let i = 0; i < group.tileParts.length; i++) {
+        const tp = group.tileParts[i]!;
+        byRange.set(`${tp.start}:${tp.end}`, gp[i]!);
+      }
+    }
+    payloads = plan.tileRanges.map((r) => {
+      const v = byRange.get(`${r.start}:${r.end}`);
+      if (!v) throw new Error('coalesced: tile-part missing from grouped payloads');
+      return v;
+    });
+  }
+
+  const codestream = stitchPartialCodestream(descriptor.header, payloads);
+  return {
+    codestream,
+    reduceLevel: options.overviewLevel,
+    decodeArea: {
+      x0: options.window.x,
+      y0: options.window.y,
+      x1: options.window.x + options.window.width,
+      y1: options.window.y + options.window.height,
+    },
+  };
+}
+
 /**
  * Fetch + decode a window of a JP2 asset. Returns a `DecodeResult` whose
  * `pixels` is `Uint8Array` for 8-bit assets (TCI / SCL / CLD / SNW) and
@@ -70,76 +150,6 @@ export async function fetchAndDecodeWindow(
   options: FetchAndDecodeOptions,
 ): Promise<DecodeResult> {
   const decoder = options.decoder ?? await loadDecoder();
-
-  const descriptor = options.descriptor ?? await (async () => {
-    const header = await fetcher.fetchRange(0, options.headerProbeBytes ?? DEFAULT_HEADER_PROBE);
-    return inspectAsset(header);
-  })();
-
-  const plan = planWindowFetches(descriptor, options.window, options.overviewLevel);
-
-  const groupProbe = options.groupProbeBytes ?? DEFAULT_GROUP_PROBE_BYTES;
-  const maxGap = options.maxCoalesceGap ?? DEFAULT_MAX_COALESCE_GAP;
-
-  let payloads: Uint8Array[];
-  if (groupProbe === 0) {
-    // Coalescing disabled — fall back to per-tile-part PLT-trimmed fetches.
-    payloads = await Promise.all(
-      plan.tileRanges.map((range) => {
-        const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
-          range,
-          keepPackets: plan.keepPackets,
-          totalPackets: plan.totalPackets,
-        };
-        if (options.tilePartProbeBytes !== undefined) {
-          opts.probeBytes = options.tilePartProbeBytes;
-        }
-        return fetchTilePartTrimmed(fetcher, opts);
-      }),
-    );
-  } else {
-    // Coalesce contiguous tile-parts and issue one probe (+ optional
-    // corrective) per group. S2 tile-parts are stored in raster order so the
-    // tile-parts intersecting an OL viewport tile usually form one or two
-    // groups — much fewer HTTP requests than per-tile-part fetching.
-    const groups = groupContiguousTileParts(plan.tileRanges, maxGap);
-    const groupedPayloads = await Promise.all(
-      groups.map((group) =>
-        fetchTilePartGroupCoalesced(fetcher, {
-          group,
-          keepPackets: plan.keepPackets,
-          totalPackets: plan.totalPackets,
-          probeBytes: groupProbe,
-        }),
-      ),
-    );
-    // Reorder back to plan.tileRanges order (groupContiguousTileParts sorts
-    // by start which is also the file order, but the planner may have its
-    // own order tied to the window — index by tile-part identity).
-    const byRange = new Map<string, Uint8Array>();
-    let g = 0;
-    for (const group of groups) {
-      const payloads = groupedPayloads[g++]!;
-      for (let i = 0; i < group.tileParts.length; i++) {
-        const tp = group.tileParts[i]!;
-        byRange.set(`${tp.start}:${tp.end}`, payloads[i]!);
-      }
-    }
-    payloads = plan.tileRanges.map((r) => {
-      const v = byRange.get(`${r.start}:${r.end}`);
-      if (!v) throw new Error('coalesced: tile-part missing from grouped payloads');
-      return v;
-    });
-  }
-
-  const codestream = stitchPartialCodestream(descriptor.header, payloads);
-  return decoder.decode(codestream, {
-    reduceLevel: options.overviewLevel,
-    decodeArea: {
-      x0: options.window.x,
-      y0: options.window.y,
-      x1: options.window.x + options.window.width,
-      y1: options.window.y + options.window.height,
-    },
-  });
+  const { codestream, reduceLevel, decodeArea } = await fetchWindowCodestream(fetcher, options);
+  return decoder.decode(codestream, { reduceLevel, decodeArea });
 }
