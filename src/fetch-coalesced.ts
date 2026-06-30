@@ -22,10 +22,14 @@
  * coalescing is a strict performance optimization, never a correctness
  * risk.
  */
-import { fetchTilePartTrimmed } from './fetch-trimmed.js';
-import { extractPacketLengths, sodOffset, truncateToPackets } from './markers/plt.js';
-import type { ByteRange } from './markers/tlm.js';
-import type { RangeFetcher } from './pipeline.js';
+import { fetchTilePartTrimmed } from "./fetch-trimmed.js";
+import {
+  extractPacketLengths,
+  sodOffset,
+  truncateToPackets,
+} from "./markers/plt.js";
+import type { ByteRange } from "./markers/tlm.js";
+import type { RangeFetcher } from "./pipeline.js";
 
 /**
  * Default coalesce gap. Tile-parts whose start-of-next minus end-of-prev
@@ -100,40 +104,43 @@ export function groupContiguousTileParts(
 function computeNeededBytesPerTilePart(
   slab: Uint8Array,
   group: TilePartGroup,
-  keepPackets: number,
+  keepPackets: readonly number[],
 ): number[] {
   const out: number[] = [];
-  for (const tp of group.tileParts) {
+  group.tileParts.forEach((tp, ti) => {
+    const keep = keepPackets[ti]!;
     const startInSlab = tp.start - group.start;
     const tpLength = tp.end - tp.start;
     // Tile-part view extends to the slab's end OR to the tile-part's own end,
-    // whichever is smaller. The parser only needs SOD + the first `keepPackets`
+    // whichever is smaller. The parser only needs SOD + the first `keep`
     // packet lengths to fit; we don't yet know how many bytes those occupy.
     const visibleEnd = Math.min(slab.length, startInSlab + tpLength);
     if (visibleEnd <= startInSlab) {
       // Tile-part start past the slab — definitely under-fetched.
-      throw new Error('coalesced: tile-part start beyond slab');
+      throw new Error("coalesced: tile-part start beyond slab");
     }
     const view = slab.subarray(startInSlab, visibleEnd);
     const sod = sodOffset(view); // throws if SOD not in view
     const lengths = extractPacketLengths(view); // throws on PLT parse failure
-    if (lengths.length < keepPackets) {
+    if (lengths.length < keep) {
       throw new Error(
-        `coalesced: PLT count ${lengths.length} < keepPackets ${keepPackets}`,
+        `coalesced: PLT count ${lengths.length} < keepPackets ${keep}`,
       );
     }
     let payloadBytes = 0;
-    for (let i = 0; i < keepPackets; i++) payloadBytes += lengths[i]!;
+    for (let i = 0; i < keep; i++) payloadBytes += lengths[i]!;
     const neededFromTilePartStart = sod + 2 + payloadBytes;
     out.push(startInSlab + neededFromTilePartStart);
-  }
+  });
   return out;
 }
 
 export interface FetchTilePartGroupCoalescedOptions {
   group: TilePartGroup;
-  keepPackets: number;
-  totalPackets: number;
+  /** Packets to keep, per tile-part (aligned with `group.tileParts`). */
+  keepPackets: readonly number[];
+  /** Total packets, per tile-part (aligned with `group.tileParts`). */
+  totalPackets: readonly number[];
   /** Probe size for the per-group fetch. Default `DEFAULT_GROUP_PROBE_BYTES`. */
   probeBytes?: number;
 }
@@ -156,9 +163,9 @@ export async function fetchTilePartGroupCoalesced(
   const probeBytes = options.probeBytes ?? DEFAULT_GROUP_PROBE_BYTES;
   const groupLength = group.end - group.start;
 
-  // Fast path A: want everything from every tile-part. One fetch covers
-  // the whole group — no PLT trim possible / needed.
-  if (keepPackets >= totalPackets) {
+  // Fast path A: every tile-part wants everything. One fetch covers the whole
+  // group — no PLT trim possible / needed.
+  if (group.tileParts.every((_, i) => keepPackets[i]! >= totalPackets[i]!)) {
     const slab = await fetcher.fetchRange(group.start, group.end);
     return sliceTilePartsFromSlab(slab, group);
   }
@@ -167,7 +174,13 @@ export async function fetchTilePartGroupCoalesced(
   // truncate.
   if (groupLength <= probeBytes) {
     const slab = await fetcher.fetchRange(group.start, group.end);
-    return trimSlabPerTilePart(slab, group, keepPackets, /* fetcher */ fetcher, totalPackets);
+    return trimSlabPerTilePart(
+      slab,
+      group,
+      keepPackets,
+      /* fetcher */ fetcher,
+      totalPackets,
+    );
   }
 
   // Probe-then-(maybe-)remainder.
@@ -185,7 +198,13 @@ export async function fetchTilePartGroupCoalesced(
   const lastNeededOffset = Math.max(...neededEndsInSlab);
   if (lastNeededOffset <= probe.length) {
     // Probe covers everything — slice each tile-part.
-    return trimSlabPerTilePart(probe, group, keepPackets, fetcher, totalPackets);
+    return trimSlabPerTilePart(
+      probe,
+      group,
+      keepPackets,
+      fetcher,
+      totalPackets,
+    );
   }
 
   // Need a corrective fetch for the bytes past the probe.
@@ -194,11 +213,20 @@ export async function fetchTilePartGroupCoalesced(
   const assembled = new Uint8Array(probe.length + remainder.length);
   assembled.set(probe, 0);
   assembled.set(remainder, probe.length);
-  return trimSlabPerTilePart(assembled, group, keepPackets, fetcher, totalPackets);
+  return trimSlabPerTilePart(
+    assembled,
+    group,
+    keepPackets,
+    fetcher,
+    totalPackets,
+  );
 }
 
 /** Slice each tile-part's full bytes from the slab (no packet truncation). */
-function sliceTilePartsFromSlab(slab: Uint8Array, group: TilePartGroup): Uint8Array[] {
+function sliceTilePartsFromSlab(
+  slab: Uint8Array,
+  group: TilePartGroup,
+): Uint8Array[] {
   const out: Uint8Array[] = [];
   for (const tp of group.tileParts) {
     const startInSlab = tp.start - group.start;
@@ -225,12 +253,15 @@ function sliceTilePartsFromSlab(slab: Uint8Array, group: TilePartGroup): Uint8Ar
 async function trimSlabPerTilePart(
   slab: Uint8Array,
   group: TilePartGroup,
-  keepPackets: number,
+  keepPackets: readonly number[],
   fetcher: RangeFetcher,
-  totalPackets: number,
+  totalPackets: readonly number[],
 ): Promise<Uint8Array[]> {
   const out: Uint8Array[] = [];
-  for (const tp of group.tileParts) {
+  for (let ti = 0; ti < group.tileParts.length; ti++) {
+    const tp = group.tileParts[ti]!;
+    const keep = keepPackets[ti]!;
+    const total = totalPackets[ti]!;
     const startInSlab = tp.start - group.start;
     const tpLength = tp.end - tp.start;
     const visibleEnd = Math.min(slab.length, startInSlab + tpLength);
@@ -239,21 +270,21 @@ async function trimSlabPerTilePart(
       out.push(
         await fetchTilePartTrimmed(fetcher, {
           range: tp,
-          keepPackets,
-          totalPackets,
+          keepPackets: keep,
+          totalPackets: total,
         }),
       );
       continue;
     }
     const view = slab.subarray(startInSlab, visibleEnd);
     try {
-      out.push(truncateToPackets(view, keepPackets));
+      out.push(truncateToPackets(view, keep));
     } catch {
       out.push(
         await fetchTilePartTrimmed(fetcher, {
           range: tp,
-          keepPackets,
-          totalPackets,
+          keepPackets: keep,
+          totalPackets: total,
         }),
       );
     }
@@ -265,15 +296,15 @@ async function trimSlabPerTilePart(
 async function fallbackPerTilePart(
   fetcher: RangeFetcher,
   group: TilePartGroup,
-  keepPackets: number,
-  totalPackets: number,
+  keepPackets: readonly number[],
+  totalPackets: readonly number[],
 ): Promise<Uint8Array[]> {
   return Promise.all(
-    group.tileParts.map((tp) =>
+    group.tileParts.map((tp, ti) =>
       fetchTilePartTrimmed(fetcher, {
         range: tp,
-        keepPackets,
-        totalPackets,
+        keepPackets: keepPackets[ti]!,
+        totalPackets: totalPackets[ti]!,
       }),
     ),
   );

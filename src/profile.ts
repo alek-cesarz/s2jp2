@@ -1,4 +1,4 @@
-import type { ProgressionOrder } from './markers/cod.js';
+import type { ProgressionOrder } from "./markers/cod.js";
 
 /**
  * Fixed parts of the S2 N0512 framework that hold across every MSI JP2 asset
@@ -17,7 +17,7 @@ export interface S2N0512Capability {
 }
 
 export const S2_N0512_CAPABILITY: S2N0512Capability = {
-  progression: 'LRCP',
+  progression: "LRCP",
   numLayers: 1,
   waveletTransform: 1,
   codeBlockStyle: 0x00,
@@ -60,7 +60,8 @@ export function computePacketTable(args: {
   /** From COD, length must equal numDecompLevels + 1, coarsest-first. */
   precincts: ReadonlyArray<readonly [number, number]>;
 }): PacketTable {
-  const { tileWidth, tileHeight, numDecompLevels, numComponents, precincts } = args;
+  const { tileWidth, tileHeight, numDecompLevels, numComponents, precincts } =
+    args;
   if (!Number.isInteger(tileWidth) || tileWidth <= 0) {
     throw new RangeError(`tileWidth=${tileWidth} must be a positive integer`);
   }
@@ -68,7 +69,9 @@ export function computePacketTable(args: {
     throw new RangeError(`tileHeight=${tileHeight} must be a positive integer`);
   }
   if (!Number.isInteger(numDecompLevels) || numDecompLevels < 0) {
-    throw new RangeError(`numDecompLevels=${numDecompLevels} must be a non-negative integer`);
+    throw new RangeError(
+      `numDecompLevels=${numDecompLevels} must be a non-negative integer`,
+    );
   }
   if (!Number.isInteger(numComponents) || numComponents < 1) {
     throw new RangeError(`numComponents=${numComponents} must be ≥ 1`);
@@ -105,9 +108,124 @@ export function computePacketTable(args: {
  *   level 0  = full resolution → all packets
  *   level R  = lowest resolution → just the packets for resolution 0
  * Returns null when level exceeds available resolutions.
+ *
+ * NOTE: this uses a SINGLE global packet table, which is only correct for the
+ * tile at the canvas origin. Precinct partitions are anchored to the image
+ * origin, so other tiles straddle the precinct grid and have DIFFERENT
+ * per-resolution packet counts — truncating them with this global count cuts
+ * mid-resolution and corrupts the decode. Use {@link keepPacketsForTile} per
+ * tile-part instead; this is kept only for callers that still need a
+ * representative figure (e.g. `totalPackets`).
  */
-export function keepPacketsForOverview(level: number, table: PacketTable): number | null {
+export function keepPacketsForOverview(
+  level: number,
+  table: PacketTable,
+): number | null {
   const r = table.packetsPerResolution.length - 1;
   if (!Number.isInteger(level) || level < 0 || level > r) return null;
   return table.cumulativePackets[r - level] ?? null;
+}
+
+/**
+ * Canvas-anchored per-tile packet geometry. Unlike {@link computePacketTable}
+ * (which counts precincts tile-relative and is only right for the origin tile),
+ * this models the JPEG 2000 precinct partition anchored to the image origin
+ * (Annex B.6), so each tile's true per-resolution packet count is computed from
+ * its position. Assumes uniform component sub-sampling (S2 assets are 1,1).
+ */
+export interface TilePacketGeometry {
+  imageWidth: number;
+  imageHeight: number;
+  tileWidth: number;
+  tileHeight: number;
+  imageXOffset: number;
+  imageYOffset: number;
+  tileXOffset: number;
+  tileYOffset: number;
+  subsamplingX: number;
+  subsamplingY: number;
+  numComponents: number;
+  numDecompLevels: number;
+  tilesPerRow: number;
+  /** COD precinct sizes, coarsest-first, length numDecompLevels + 1. */
+  precincts: ReadonlyArray<readonly [number, number]>;
+}
+
+/**
+ * Packets per resolution for ONE tile (index 0 = coarsest resolution), computed
+ * position-aware. For resolution level r the tile occupies resolution-grid
+ * coords [trx0,trx1)×[try0,try1); the number of precincts is
+ * `ceil(tr1/2^PP) − floor(tr0/2^PP)` per axis — i.e. counted on the
+ * image-anchored precinct grid, NOT tile-relative.
+ */
+export function packetsPerResolutionForTile(
+  geom: TilePacketGeometry,
+  tileIndex: number,
+): number[] {
+  const p = tileIndex % geom.tilesPerRow;
+  const q = Math.floor(tileIndex / geom.tilesPerRow);
+  const sx = geom.subsamplingX || 1;
+  const sy = geom.subsamplingY || 1;
+  const tcx0 = Math.ceil(
+    Math.max(geom.tileXOffset + p * geom.tileWidth, geom.imageXOffset) / sx,
+  );
+  const tcx1 = Math.ceil(
+    Math.min(geom.tileXOffset + (p + 1) * geom.tileWidth, geom.imageWidth) / sx,
+  );
+  const tcy0 = Math.ceil(
+    Math.max(geom.tileYOffset + q * geom.tileHeight, geom.imageYOffset) / sy,
+  );
+  const tcy1 = Math.ceil(
+    Math.min(geom.tileYOffset + (q + 1) * geom.tileHeight, geom.imageHeight) /
+      sy,
+  );
+  const NL = geom.numDecompLevels;
+  const out: number[] = new Array(NL + 1);
+  for (let r = 0; r <= NL; r++) {
+    const div = 2 ** (NL - r);
+    const trx0 = Math.ceil(tcx0 / div);
+    const trx1 = Math.ceil(tcx1 / div);
+    const try0 = Math.ceil(tcy0 / div);
+    const try1 = Math.ceil(tcy1 / div);
+    const [ppx, ppy] = geom.precincts[r] ?? [15, 15];
+    const nx =
+      trx1 > trx0
+        ? Math.ceil(trx1 / 2 ** ppx) - Math.floor(trx0 / 2 ** ppx)
+        : 0;
+    const ny =
+      try1 > try0
+        ? Math.ceil(try1 / 2 ** ppy) - Math.floor(try0 / 2 ** ppy)
+        : 0;
+    out[r] = nx * ny * geom.numComponents;
+  }
+  return out;
+}
+
+/**
+ * Packets to keep for a tile-part at overview `level`: the packets for
+ * resolutions `0 … numDecompLevels − level` of THAT tile. Returns null when
+ * `level` exceeds the available resolutions.
+ */
+export function keepPacketsForTile(
+  geom: TilePacketGeometry,
+  tileIndex: number,
+  level: number,
+): number | null {
+  const NL = geom.numDecompLevels;
+  if (!Number.isInteger(level) || level < 0 || level > NL) return null;
+  const per = packetsPerResolutionForTile(geom, tileIndex);
+  let sum = 0;
+  for (let r = 0; r <= NL - level; r++) sum += per[r]!;
+  return sum;
+}
+
+/** Total packets (all resolutions) for a tile-part. */
+export function totalPacketsForTile(
+  geom: TilePacketGeometry,
+  tileIndex: number,
+): number {
+  const per = packetsPerResolutionForTile(geom, tileIndex);
+  let sum = 0;
+  for (const v of per) sum += v;
+  return sum;
 }

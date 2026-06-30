@@ -1,13 +1,22 @@
-import { WindowError } from './errors.js';
-import type { AssetDescriptor } from './inspect.js';
-import type { ByteRange } from './markers/tlm.js';
-import { keepPacketsForOverview } from './profile.js';
+import { WindowError } from "./errors.js";
+import type { AssetDescriptor } from "./inspect.js";
+import type { ByteRange } from "./markers/tlm.js";
 import {
-  groupedTilePartRanges, validateWindow, windowTileIndices,
-} from './window.js';
+  keepPacketsForOverview,
+  keepPacketsForTile,
+  totalPacketsForTile,
+} from "./profile.js";
+import {
+  groupedTilePartRanges,
+  validateWindow,
+  windowTileIndices,
+} from "./window.js";
 
 export interface Window {
-  x: number; y: number; width: number; height: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -29,10 +38,16 @@ const SMALL_TILE_PX = 512;
 
 export interface FetchPlan {
   tileIndices: number[];
-  tileRanges: ByteRange[];   // intersecting tile-parts in TLM order
-  ranges: ByteRange[];       // coalesced ranges for fetching
+  tileRanges: ByteRange[]; // intersecting tile-parts in TLM order
+  ranges: ByteRange[]; // coalesced ranges for fetching
+  /** Representative (origin-tile) figures — kept for back-compat. Per-tile-part
+   *  trimming MUST use the per-index maps below, which are position-aware. */
   keepPackets: number;
   totalPackets: number;
+  /** Packets to keep, per tile index (canvas-anchored, position-aware). */
+  keepPacketsByIndex: Map<number, number>;
+  /** Total packets, per tile index. */
+  totalPacketsByIndex: Map<number, number>;
 }
 
 export function planWindowFetches(
@@ -40,8 +55,17 @@ export function planWindowFetches(
   window: Window,
   overviewLevel: number,
 ): FetchPlan {
-  validateWindow(descriptor.tileGrid, window.x, window.y, window.width, window.height);
-  let keepPackets = keepPacketsForOverview(overviewLevel, descriptor.packetTable);
+  validateWindow(
+    descriptor.tileGrid,
+    window.x,
+    window.y,
+    window.width,
+    window.height,
+  );
+  let keepPackets = keepPacketsForOverview(
+    overviewLevel,
+    descriptor.packetTable,
+  );
   if (keepPackets === null) {
     throw new WindowError(
       `overview level ${overviewLevel} exceeds asset max ${descriptor.numDecompLevels}`,
@@ -61,18 +85,51 @@ export function planWindowFetches(
   // deep levels of a ≥6-resolution asset where the post-reduce dimension alone
   // would otherwise dip below the floor (1024 >> 5 = 32).
   const tileMin = Math.min(descriptor.siz.tileWidth, descriptor.siz.tileHeight);
-  if (tileMin > 0 && tileMin <= SMALL_TILE_PX) {
-    const reducedTileMin = tileMin >> overviewLevel;
-    if (reducedTileMin < MIN_RELIABLE_REDUCED_TILE) keepPackets = totalPackets;
-  }
+  const forceFullRead =
+    tileMin > 0 &&
+    tileMin <= SMALL_TILE_PX &&
+    tileMin >> overviewLevel < MIN_RELIABLE_REDUCED_TILE;
+  if (forceFullRead) keepPackets = totalPackets;
   const tileIndices = windowTileIndices(
-    descriptor.tileGrid, window.x, window.y, window.width, window.height,
+    descriptor.tileGrid,
+    window.x,
+    window.y,
+    window.width,
+    window.height,
   );
   const tileRanges = tileIndices.map((idx) => {
     const r = descriptor.tileRanges[idx];
-    if (!r) throw new WindowError(`tile index ${idx} out of TLM range (${descriptor.tileRanges.length})`);
+    if (!r)
+      throw new WindowError(
+        `tile index ${idx} out of TLM range (${descriptor.tileRanges.length})`,
+      );
     return r;
   });
   const grouped = groupedTilePartRanges(descriptor.tileRanges, tileIndices);
-  return { tileIndices, tileRanges, ranges: grouped, keepPackets, totalPackets };
+
+  // Per-tile keepPackets/totalPackets. Precinct partitions are anchored to the
+  // image origin, so tiles straddle the grid differently and have different
+  // per-resolution packet counts; a global keepPackets cuts the non-origin tiles
+  // mid-resolution. When the small-tile guard forces a full read, keep == total
+  // per tile (no trim) — preserving the boundary-clamp safeguard.
+  const geom = descriptor.tilePacketGeometry;
+  const keepPacketsByIndex = new Map<number, number>();
+  const totalPacketsByIndex = new Map<number, number>();
+  for (const idx of tileIndices) {
+    const tileTotal = totalPacketsForTile(geom, idx);
+    totalPacketsByIndex.set(idx, tileTotal);
+    const tileKeep = forceFullRead
+      ? tileTotal
+      : (keepPacketsForTile(geom, idx, overviewLevel) ?? tileTotal);
+    keepPacketsByIndex.set(idx, tileKeep);
+  }
+  return {
+    tileIndices,
+    tileRanges,
+    ranges: grouped,
+    keepPackets,
+    totalPackets,
+    keepPacketsByIndex,
+    totalPacketsByIndex,
+  };
 }

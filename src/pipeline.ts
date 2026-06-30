@@ -1,17 +1,17 @@
-import { loadDecoder } from './decoder/decoder.js';
-import type { DecodeResult, Decoder } from './decoder/decoder.js';
+import { loadDecoder } from "./decoder/decoder.js";
+import type { DecodeResult, Decoder } from "./decoder/decoder.js";
 import {
   fetchTilePartGroupCoalesced,
   groupContiguousTileParts,
   DEFAULT_GROUP_PROBE_BYTES,
   DEFAULT_MAX_COALESCE_GAP,
-} from './fetch-coalesced.js';
-import { fetchTilePartTrimmed } from './fetch-trimmed.js';
-import { inspectAsset } from './inspect.js';
-import type { AssetDescriptor } from './inspect.js';
-import { stitchPartialCodestream } from './markers/codestream.js';
-import { planWindowFetches } from './planner.js';
-import type { Window } from './planner.js';
+} from "./fetch-coalesced.js";
+import { fetchTilePartTrimmed } from "./fetch-trimmed.js";
+import { inspectAsset } from "./inspect.js";
+import type { AssetDescriptor } from "./inspect.js";
+import { stitchPartialCodestream } from "./markers/codestream.js";
+import { planWindowFetches } from "./planner.js";
+import type { Window } from "./planner.js";
 
 export interface RangeFetcher {
   fetchRange(start: number, end: number): Promise<Uint8Array>;
@@ -70,13 +70,42 @@ export async function fetchWindowCodestream(
   const descriptor =
     options.descriptor ??
     (await (async () => {
-      const header = await fetcher.fetchRange(0, options.headerProbeBytes ?? DEFAULT_HEADER_PROBE);
+      const header = await fetcher.fetchRange(
+        0,
+        options.headerProbeBytes ?? DEFAULT_HEADER_PROBE,
+      );
       return inspectAsset(header);
     })());
 
-  const plan = planWindowFetches(descriptor, options.window, options.overviewLevel);
+  const plan = planWindowFetches(
+    descriptor,
+    options.window,
+    options.overviewLevel,
+  );
   const groupProbe = options.groupProbeBytes ?? DEFAULT_GROUP_PROBE_BYTES;
   const maxGap = options.maxCoalesceGap ?? DEFAULT_MAX_COALESCE_GAP;
+
+  // Per-tile-part keep/total, position-aware (precincts are image-anchored, so
+  // a global count truncates non-origin tiles mid-resolution). Map each
+  // tile-part byte range → its tile index → keep/total.
+  const indexByRange = new Map<string, number>();
+  plan.tileRanges.forEach((r, i) =>
+    indexByRange.set(`${r.start}:${r.end}`, plan.tileIndices[i]!),
+  );
+  const keepFor = (r: { start: number; end: number }): number => {
+    const idx = indexByRange.get(`${r.start}:${r.end}`);
+    return (
+      (idx !== undefined ? plan.keepPacketsByIndex.get(idx) : undefined) ??
+      plan.keepPackets
+    );
+  };
+  const totalFor = (r: { start: number; end: number }): number => {
+    const idx = indexByRange.get(`${r.start}:${r.end}`);
+    return (
+      (idx !== undefined ? plan.totalPacketsByIndex.get(idx) : undefined) ??
+      plan.totalPackets
+    );
+  };
 
   let payloads: Uint8Array[];
   if (groupProbe === 0) {
@@ -84,8 +113,8 @@ export async function fetchWindowCodestream(
       plan.tileRanges.map((range) => {
         const opts: Parameters<typeof fetchTilePartTrimmed>[1] = {
           range,
-          keepPackets: plan.keepPackets,
-          totalPackets: plan.totalPackets,
+          keepPackets: keepFor(range),
+          totalPackets: totalFor(range),
         };
         if (options.tilePartProbeBytes !== undefined) {
           opts.probeBytes = options.tilePartProbeBytes;
@@ -99,8 +128,8 @@ export async function fetchWindowCodestream(
       groups.map((group) =>
         fetchTilePartGroupCoalesced(fetcher, {
           group,
-          keepPackets: plan.keepPackets,
-          totalPackets: plan.totalPackets,
+          keepPackets: group.tileParts.map(keepFor),
+          totalPackets: group.tileParts.map(totalFor),
           probeBytes: groupProbe,
         }),
       ),
@@ -116,7 +145,8 @@ export async function fetchWindowCodestream(
     }
     payloads = plan.tileRanges.map((r) => {
       const v = byRange.get(`${r.start}:${r.end}`);
-      if (!v) throw new Error('coalesced: tile-part missing from grouped payloads');
+      if (!v)
+        throw new Error("coalesced: tile-part missing from grouped payloads");
       return v;
     });
   }
@@ -149,7 +179,10 @@ export async function fetchAndDecodeWindow(
   fetcher: RangeFetcher,
   options: FetchAndDecodeOptions,
 ): Promise<DecodeResult> {
-  const decoder = options.decoder ?? await loadDecoder();
-  const { codestream, reduceLevel, decodeArea } = await fetchWindowCodestream(fetcher, options);
+  const decoder = options.decoder ?? (await loadDecoder());
+  const { codestream, reduceLevel, decodeArea } = await fetchWindowCodestream(
+    fetcher,
+    options,
+  );
   return decoder.decode(codestream, { reduceLevel, decodeArea });
 }

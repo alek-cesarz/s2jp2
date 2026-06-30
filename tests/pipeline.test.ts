@@ -1,65 +1,77 @@
-import { existsSync, openSync, readSync, closeSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { fetchAndDecodeWindow, fetchWindowCodestream } from '../src/pipeline.js';
-import type { RangeFetcher } from '../src/pipeline.js';
-import type { AssetDescriptor } from '../src/inspect.js';
+import { existsSync, openSync, readSync, closeSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import {
+  fetchAndDecodeWindow,
+  fetchWindowCodestream,
+} from "../src/pipeline.js";
+import type { RangeFetcher } from "../src/pipeline.js";
+import type { AssetDescriptor } from "../src/inspect.js";
 
-const TCI = 'tests/fixtures/sample_TCI_10m.jp2';
-const B04 = 'tests/fixtures/sample_B04_60m.jp2';
+const TCI = "tests/fixtures/sample_TCI_10m.jp2";
+const B04 = "tests/fixtures/sample_B04_60m.jp2";
 
 /** A toy file-backed RangeFetcher for the test. */
 function fileFetcher(path: string) {
-  const fd = openSync(path, 'r');
+  const fd = openSync(path, "r");
   return {
     async fetchRange(start: number, end: number): Promise<Uint8Array> {
       const buf = Buffer.alloc(end - start);
       readSync(fd, buf, 0, buf.length, start);
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     },
-    close() { closeSync(fd); },
+    close() {
+      closeSync(fd);
+    },
   };
 }
 
-describe.runIf(existsSync(TCI))('fetchAndDecodeWindow (TCI 10m, uint8 RGB)', () => {
-  it('decodes a 1024×1024 window at overview 3 → 128×128 uint8 RGB', async () => {
-    const fetcher = fileFetcher(TCI);
-    try {
-      const result = await fetchAndDecodeWindow(fetcher, {
-        window: { x: 4096, y: 4096, width: 1024, height: 1024 },
-        overviewLevel: 3,
-      });
-      expect(result.width).toBe(128);
-      expect(result.height).toBe(128);
-      expect(result.numComponents).toBe(3);
-      expect(result.bitsPerSample).toBe(8);
-      expect(result.pixels).toBeInstanceOf(Uint8Array);
-      let nz = 0;
-      for (let i = 0; i < result.pixels.length; i += 100) if (result.pixels[i] !== 0) nz++;
-      expect(nz).toBeGreaterThan(0);
-    } finally {
-      fetcher.close();
-    }
-  });
-});
+describe.runIf(existsSync(TCI))(
+  "fetchAndDecodeWindow (TCI 10m, uint8 RGB)",
+  () => {
+    it("decodes a 1024×1024 window at overview 3 → 128×128 uint8 RGB", async () => {
+      const fetcher = fileFetcher(TCI);
+      try {
+        const result = await fetchAndDecodeWindow(fetcher, {
+          window: { x: 4096, y: 4096, width: 1024, height: 1024 },
+          overviewLevel: 3,
+        });
+        expect(result.width).toBe(128);
+        expect(result.height).toBe(128);
+        expect(result.numComponents).toBe(3);
+        expect(result.bitsPerSample).toBe(8);
+        expect(result.pixels).toBeInstanceOf(Uint8Array);
+        let nz = 0;
+        for (let i = 0; i < result.pixels.length; i += 100)
+          if (result.pixels[i] !== 0) nz++;
+        expect(nz).toBeGreaterThan(0);
+      } finally {
+        fetcher.close();
+      }
+    });
+  },
+);
 
-describe.runIf(existsSync(B04))('fetchAndDecodeWindow (B04 60m, uint16 single-band)', () => {
-  it('decodes a 512×512 window at overview 1 → 256×256 uint16 single-band', async () => {
-    const fetcher = fileFetcher(B04);
-    try {
-      const result = await fetchAndDecodeWindow(fetcher, {
-        window: { x: 256, y: 256, width: 512, height: 512 },
-        overviewLevel: 1,
-      });
-      expect(result.width).toBe(256);
-      expect(result.height).toBe(256);
-      expect(result.numComponents).toBe(1);
-      expect(result.bitsPerSample).toBeGreaterThan(8);
-      expect(result.pixels).toBeInstanceOf(Uint16Array);
-    } finally {
-      fetcher.close();
-    }
-  });
-});
+describe.runIf(existsSync(B04))(
+  "fetchAndDecodeWindow (B04 60m, uint16 single-band)",
+  () => {
+    it("decodes a 512×512 window at overview 1 → 256×256 uint16 single-band", async () => {
+      const fetcher = fileFetcher(B04);
+      try {
+        const result = await fetchAndDecodeWindow(fetcher, {
+          window: { x: 256, y: 256, width: 512, height: 512 },
+          overviewLevel: 1,
+        });
+        expect(result.width).toBe(256);
+        expect(result.height).toBe(256);
+        expect(result.numComponents).toBe(1);
+        expect(result.bitsPerSample).toBeGreaterThan(8);
+        expect(result.pixels).toBeInstanceOf(Uint16Array);
+      } finally {
+        fetcher.close();
+      }
+    });
+  },
+);
 
 // ── fetchWindowCodestream — synthetic fixture ─────────────────────────────────
 //
@@ -106,21 +118,65 @@ const FAKE_HEADER = Uint8Array.from([
 // Total = 50 bytes → Psot = 0x00000032 (50)
 const FAKE_TILE_PART = Uint8Array.from([
   // SOT: FF 90, Lsot=000A, Isot=0000, Psot=0x00000033 (51), TPsot=00, TNsot=01
-  0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33, 0x00, 0x01,
+  0xff,
+  0x90,
+  0x00,
+  0x0a,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x33,
+  0x00,
+  0x01,
   // PLT: FF 58, Lplt=0x0012 (18 = 2 header + 1 Zplt + 15 Iplt lengths... wait)
   // Lplt = 2 (fixed) + 1 (Zplt) + 16 (packet lengths) = 19, but Lplt itself
   // is 2 bytes so total segment = 2 (marker) + 19 (Lplt value) = 21 bytes.
   // Actually Lplt is the length of the rest of the PLT marker segment
   // (excluding the FF 58 marker itself but INCLUDING the Lplt field):
   // Lplt = 2 (Lplt itself) + 1 (Zplt) + 16 (Iplt values) = 19 = 0x0013
-  0xff, 0x58, 0x00, 0x13, 0x00,  // marker, Lplt=0x0013, Zplt=0x00
-  0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, // 8 packet lengths of 1
-  0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, // 8 more → 16 total
+  0xff,
+  0x58,
+  0x00,
+  0x13,
+  0x00, // marker, Lplt=0x0013, Zplt=0x00
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01, // 8 packet lengths of 1
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x01, // 8 more → 16 total
   // SOD: FF 93
-  0xff, 0x93,
+  0xff,
+  0x93,
   // payload: 16 bytes (one byte per packet)
-  0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+  0x01,
+  0x02,
+  0x03,
+  0x04,
+  0x05,
+  0x06,
+  0x07,
+  0x08,
+  0x09,
+  0x0a,
+  0x0b,
+  0x0c,
+  0x0d,
+  0x0e,
+  0x0f,
+  0x10,
 ]);
 
 const TILE_START = 1000;
@@ -131,7 +187,13 @@ const TILE_END = TILE_START + FAKE_TILE_PART.byteLength;
 function makeFakeDescriptor(): AssetDescriptor {
   const tile = 1024;
   return {
-    siz: { imageWidth: tile, imageHeight: tile, tileWidth: tile, tileHeight: tile, numComponents: 1 },
+    siz: {
+      imageWidth: tile,
+      imageHeight: tile,
+      tileWidth: tile,
+      tileHeight: tile,
+      numComponents: 1,
+    },
     cod: {} as never,
     numDecompLevels: 4,
     numResolutions: 5,
@@ -139,9 +201,39 @@ function makeFakeDescriptor(): AssetDescriptor {
       packetsPerResolution: [1, 1, 1, 4, 9],
       cumulativePackets: [1, 2, 3, 7, 16],
     },
+    // Geometry chosen so per-tile keepPackets reproduces the synthetic tile-part's
+    // [1,1,1,4,9] (16 packets): a 192 px tile with 64 px precincts.
+    tilePacketGeometry: {
+      imageWidth: 192,
+      imageHeight: 192,
+      tileWidth: 192,
+      tileHeight: 192,
+      imageXOffset: 0,
+      imageYOffset: 0,
+      tileXOffset: 0,
+      tileYOffset: 0,
+      subsamplingX: 1,
+      subsamplingY: 1,
+      numComponents: 1,
+      numDecompLevels: 4,
+      tilesPerRow: 1,
+      precincts: [
+        [6, 6],
+        [6, 6],
+        [6, 6],
+        [6, 6],
+        [6, 6],
+      ],
+    },
     tileGrid: {
-      imageWidth: tile, imageHeight: tile, tileWidth: tile, tileHeight: tile,
-      tilesPerRow: 1, tilesPerCol: 1, totalTiles: 1, numComponents: 1,
+      imageWidth: tile,
+      imageHeight: tile,
+      tileWidth: tile,
+      tileHeight: tile,
+      tilesPerRow: 1,
+      tilesPerCol: 1,
+      totalTiles: 1,
+      numComponents: 1,
     },
     tileRanges: [{ start: TILE_START, end: TILE_END }],
     header: FAKE_HEADER,
@@ -160,8 +252,8 @@ function makeFakeFetcher(): RangeFetcher {
   };
 }
 
-describe('fetchWindowCodestream (synthetic fixture, no WASM decoder)', () => {
-  it('assembles a codestream without decoding', async () => {
+describe("fetchWindowCodestream (synthetic fixture, no WASM decoder)", () => {
+  it("assembles a codestream without decoding", async () => {
     const fakeFetcher = makeFakeFetcher();
     const testDescriptor = makeFakeDescriptor();
 

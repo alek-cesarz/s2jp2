@@ -1,13 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_PROBE_BYTES,
   DEFAULT_MAX_COALESCE_GAP,
   fetchTilePartGroupCoalesced,
   groupContiguousTileParts,
-} from '../src/fetch-coalesced.js';
-import { truncateToPackets } from '../src/markers/plt.js';
-import type { ByteRange } from '../src/markers/tlm.js';
-import type { RangeFetcher } from '../src/pipeline.js';
+} from "../src/fetch-coalesced.js";
+import { truncateToPackets } from "../src/markers/plt.js";
+import type { ByteRange } from "../src/markers/tlm.js";
+import type { RangeFetcher } from "../src/pipeline.js";
 
 // ── Synthetic tile-part fixture (reuse the shape from fetch-trimmed tests) ──
 //
@@ -32,9 +32,10 @@ interface FetchCall {
   end: number;
 }
 
-function makeRecordingFetcher(
-  fileBytes: Uint8Array,
-): { fetcher: RangeFetcher; calls: FetchCall[] } {
+function makeRecordingFetcher(fileBytes: Uint8Array): {
+  fetcher: RangeFetcher;
+  calls: FetchCall[];
+} {
   const calls: FetchCall[] = [];
   const fetcher: RangeFetcher = {
     async fetchRange(start, end) {
@@ -51,7 +52,10 @@ function makeRecordingFetcher(
  * padded with 0x00 between tile-parts; total file size includes a trailing
  * 100 bytes of pad.
  */
-function makeFile(offsets: number[]): { file: Uint8Array; ranges: ByteRange[] } {
+function makeFile(offsets: number[]): {
+  file: Uint8Array;
+  ranges: ByteRange[];
+} {
   const tp = synthTilePart();
   const last = offsets[offsets.length - 1]!;
   const totalSize = last + tp.length + 100;
@@ -66,12 +70,12 @@ function makeFile(offsets: number[]): { file: Uint8Array; ranges: ByteRange[] } 
 
 // ── groupContiguousTileParts ─────────────────────────────────────
 
-describe('groupContiguousTileParts', () => {
-  it('returns [] on empty input', () => {
+describe("groupContiguousTileParts", () => {
+  it("returns [] on empty input", () => {
     expect(groupContiguousTileParts([])).toEqual([]);
   });
 
-  it('returns a single group for one range', () => {
+  it("returns a single group for one range", () => {
     const out = groupContiguousTileParts([{ start: 100, end: 200 }]);
     expect(out).toHaveLength(1);
     expect(out[0]!.start).toBe(100);
@@ -79,7 +83,7 @@ describe('groupContiguousTileParts', () => {
     expect(out[0]!.tileParts).toHaveLength(1);
   });
 
-  it('coalesces byte-adjacent ranges into one group', () => {
+  it("coalesces byte-adjacent ranges into one group", () => {
     const out = groupContiguousTileParts([
       { start: 100, end: 200 },
       { start: 200, end: 300 },
@@ -91,7 +95,7 @@ describe('groupContiguousTileParts', () => {
     expect(out[0]!.tileParts).toHaveLength(3);
   });
 
-  it('coalesces ranges with a small gap (≤ maxGap)', () => {
+  it("coalesces ranges with a small gap (≤ maxGap)", () => {
     const out = groupContiguousTileParts(
       [
         { start: 100, end: 200 },
@@ -102,7 +106,7 @@ describe('groupContiguousTileParts', () => {
     expect(out).toHaveLength(1);
   });
 
-  it('splits ranges with a large gap (> maxGap)', () => {
+  it("splits ranges with a large gap (> maxGap)", () => {
     const out = groupContiguousTileParts(
       [
         { start: 100, end: 200 },
@@ -113,7 +117,7 @@ describe('groupContiguousTileParts', () => {
     expect(out).toHaveLength(2);
   });
 
-  it('sorts unsorted input by start offset', () => {
+  it("sorts unsorted input by start offset", () => {
     const out = groupContiguousTileParts([
       { start: 400, end: 500 },
       { start: 100, end: 200 },
@@ -123,10 +127,13 @@ describe('groupContiguousTileParts', () => {
     expect(out[0]!.tileParts.map((tp) => tp.start)).toEqual([100, 200, 400]);
   });
 
-  it('uses default maxGap when not provided', () => {
+  it("uses default maxGap when not provided", () => {
     const out = groupContiguousTileParts([
       { start: 100, end: 200 },
-      { start: 200 + DEFAULT_MAX_COALESCE_GAP, end: 300 + DEFAULT_MAX_COALESCE_GAP },
+      {
+        start: 200 + DEFAULT_MAX_COALESCE_GAP,
+        end: 300 + DEFAULT_MAX_COALESCE_GAP,
+      },
     ]);
     expect(out).toHaveLength(1); // exactly at the boundary still coalesces
   });
@@ -134,16 +141,16 @@ describe('groupContiguousTileParts', () => {
 
 // ── fetchTilePartGroupCoalesced ──────────────────────────────────
 
-describe('fetchTilePartGroupCoalesced', () => {
-  it('Fast path A: keepPackets >= totalPackets uses one full fetch', async () => {
+describe("fetchTilePartGroupCoalesced", () => {
+  it("Fast path A: keepPackets >= totalPackets uses one full fetch", async () => {
     // Three byte-adjacent tile-parts at offsets 0, 31, 62.
     const { file, ranges } = makeFile([0, 31, 62]);
     const group = { start: 0, end: 31 * 3, tileParts: ranges };
     const { fetcher, calls } = makeRecordingFetcher(file);
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 3,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 3),
+      totalPackets: group.tileParts.map(() => 3),
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({ start: 0, end: 31 * 3 });
@@ -152,14 +159,14 @@ describe('fetchTilePartGroupCoalesced', () => {
     for (const tp of out) expect(tp.byteLength).toBe(TP_BYTES);
   });
 
-  it('Fast path B: group fits within probe → one fetch + per-tile-part truncate', async () => {
+  it("Fast path B: group fits within probe → one fetch + per-tile-part truncate", async () => {
     const { file, ranges } = makeFile([0, 31, 62]);
     const group = { start: 0, end: 31 * 3, tileParts: ranges };
     const { fetcher, calls } = makeRecordingFetcher(file);
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 2,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 2),
+      totalPackets: group.tileParts.map(() => 3),
       probeBytes: 200, // larger than the 93-byte group
     });
     expect(calls).toHaveLength(1);
@@ -170,7 +177,7 @@ describe('fetchTilePartGroupCoalesced', () => {
     for (const tp of out) expect(Array.from(tp)).toEqual(Array.from(expected));
   });
 
-  it('Probe + corrective: under-sized probe triggers one additional fetch', async () => {
+  it("Probe + corrective: under-sized probe triggers one additional fetch", async () => {
     // Three byte-adjacent tile-parts at offsets 0, 31, 62. With keepPackets=2
     // we need bytes through offset 27 within each tile-part (SOD at 20 + 2 +
     // 5 payload bytes). So the last needed offset is 62 + 27 = 89. A probe of
@@ -186,8 +193,8 @@ describe('fetchTilePartGroupCoalesced', () => {
     // 0-21, 31-52, 62-83) but doesn't cover bytes through 89.
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 2,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 2),
+      totalPackets: group.tileParts.map(() => 3),
       probeBytes: 84, // covers all three PLTs but not all needed payload
     });
     // 1 probe + 1 corrective.
@@ -200,7 +207,7 @@ describe('fetchTilePartGroupCoalesced', () => {
     for (const tp of out) expect(Array.from(tp)).toEqual(Array.from(expected));
   });
 
-  it('Fallback: under-sized probe (no PLT visible) → per-tile-part fetches', async () => {
+  it("Fallback: under-sized probe (no PLT visible) → per-tile-part fetches", async () => {
     const { file, ranges } = makeFile([0, 31, 62]);
     const group = { start: 0, end: 31 * 3, tileParts: ranges };
     const { fetcher, calls } = makeRecordingFetcher(file);
@@ -208,8 +215,8 @@ describe('fetchTilePartGroupCoalesced', () => {
     // and 2's headers are past the probe → falls back to per-tile-part.
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 2,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 2),
+      totalPackets: group.tileParts.map(() => 3),
       probeBytes: 22,
     });
     // Probe + 3 per-tile-part fetches (each does its own full-tile-part
@@ -222,22 +229,24 @@ describe('fetchTilePartGroupCoalesced', () => {
     for (const tp of out) expect(Array.from(tp)).toEqual(Array.from(expected));
   });
 
-  it('Single-tile-part group degrades to one fetch (Fast path A / B)', async () => {
+  it("Single-tile-part group degrades to one fetch (Fast path A / B)", async () => {
     const { file, ranges } = makeFile([0]);
     const group = { start: 0, end: 31, tileParts: ranges };
     const { fetcher, calls } = makeRecordingFetcher(file);
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 1,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 1),
+      totalPackets: group.tileParts.map(() => 3),
       probeBytes: 200,
     });
     expect(calls).toHaveLength(1);
     expect(out).toHaveLength(1);
-    expect(Array.from(out[0]!)).toEqual(Array.from(truncateToPackets(synthTilePart(), 1)));
+    expect(Array.from(out[0]!)).toEqual(
+      Array.from(truncateToPackets(synthTilePart(), 1)),
+    );
   });
 
-  it('uses DEFAULT_GROUP_PROBE_BYTES when probeBytes is not provided', async () => {
+  it("uses DEFAULT_GROUP_PROBE_BYTES when probeBytes is not provided", async () => {
     // Sanity: the constant is exported and used by the pipeline.
     expect(DEFAULT_GROUP_PROBE_BYTES).toBeGreaterThan(0);
     expect(DEFAULT_GROUP_PROBE_BYTES).toBeGreaterThan(31 * 3);
@@ -247,8 +256,8 @@ describe('fetchTilePartGroupCoalesced', () => {
     const { fetcher, calls } = makeRecordingFetcher(file);
     const out = await fetchTilePartGroupCoalesced(fetcher, {
       group,
-      keepPackets: 1,
-      totalPackets: 3,
+      keepPackets: group.tileParts.map(() => 1),
+      totalPackets: group.tileParts.map(() => 3),
     });
     expect(calls).toHaveLength(1);
     expect(out).toHaveLength(3);
